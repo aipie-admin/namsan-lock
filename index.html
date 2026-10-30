@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>남산 사랑의 자물쇠</title><link rel="stylesheet" href="./src/style.css"></head>
+<body>
+<canvas id="c"></canvas>
+<div id="loading" class="screen"><div class="card"><h1>🔒 남산 사랑의 자물쇠</h1><p id="loadmsg">불러오는 중…</p></div></div>
+<div id="servers" class="screen hidden"><div class="card">
+  <h1>🔒 남산 사랑의 자물쇠</h1><p class="sub">N서울타워 펜스에 단 하나뿐인 자물쇠를 걸어보세요</p>
+  <div id="serverList"></div>
+  <p class="note">서버마다 1인당 자물쇠 1개 · 걸고 나면 수정·삭제할 수 없어요 · 욕설/비속어는 걸 수 없어요</p>
+</div></div>
+<div id="hud" class="hidden">
+  <div id="topbar"><span id="srvName"></span><span id="lockCount"></span><button id="qualityBtn"></button><button id="exitBtn">서버 변경</button></div>
+  <div id="status"></div>
+  <div id="prompt" class="hidden"></div>
+  <div id="help">WASD/방향키 이동 · Shift 달리기 · 마우스 드래그 시점 · 휠 줌 · E 대화/자물쇠 걸기 · 자물쇠 클릭 시 메시지</div>
+  <div id="joy"><div id="knob"></div></div>
+  <button id="actBtn" class="hidden">🔒</button>
+</div>
+<div id="tip" class="hidden"></div>
+<div id="modal" class="screen hidden"><div class="card">
+  <h2>자물쇠 걸기</h2>
+  <p id="heldLock"></p>
+  <label>닉네임 <input id="nick" maxlength="12" placeholder="익명"></label>
+  <label>메시지 <textarea id="msg" maxlength="60" rows="3" placeholder="영원히 함께해 ❤️ (최대 60자)"></textarea></label>
+  <p class="warn">⚠️ 한 번 걸면 수정·삭제할 수 없어요.</p>
+  <p id="err"></p>
+  <div class="row"><button id="cancelBtn" class="ghost">취소</button><button id="hangBtn">걸기</button></div>
+</div></div>
+<div id="shop" class="screen hidden"><div class="card">
+  <h2 id="shopName"></h2><p id="shopGreet" class="sub"></p><div id="types"></div>
+  <div class="row"><button id="shopClose" class="ghost">닫기</button><button id="buyBtn">이걸로 할게요</button></div>
+</div></div>
+<div id="view" class="screen hidden"><div class="card"><div id="viewBody"></div><button id="viewClose">닫기</button></div></div>
+<script type="module" src="./src/main.js"></script>
+</body></html>
