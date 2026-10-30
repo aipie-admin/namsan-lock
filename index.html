@@ -4,8 +4,16 @@
 <body>
 <canvas id="c"></canvas>
 <div id="loading" class="screen"><div class="card"><h1>🔒 남산 사랑의 자물쇠</h1><p id="loadmsg">불러오는 중…</p></div></div>
+<div id="profile" class="screen hidden"><div class="card">
+  <h1>🔒 남산 사랑의 자물쇠</h1><p class="sub">프로필을 만들어주세요</p>
+  <label>이름 <input id="pName" maxlength="10" placeholder="최대 10자"></label>
+  <div id="charSel"><span>캐릭터</span><button class="chr" data-k="m">🧑 남자</button><button class="chr" data-k="f">👩 여자</button></div>
+  <p id="pErr" class="err"></p>
+  <div class="row"><button id="pSave">시작하기</button></div>
+</div></div>
 <div id="servers" class="screen hidden"><div class="card">
   <h1>🔒 남산 사랑의 자물쇠</h1><p class="sub">어떤 마음을 걸러 왔나요? 서버를 골라주세요</p>
+  <p id="meLine"><span id="meName"></span> <button id="profBtn" class="ghost">프로필 변경</button></p>
   <div id="serverList"></div>
   <p class="note">서버마다 1인당 자물쇠 1개 · 걸고 나면 수정·삭제할 수 없어요 · 욕설/비속어는 걸 수 없어요</p>
 </div></div>

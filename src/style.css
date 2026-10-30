@@ -25,3 +25,6 @@ label{display:block;font-size:13px;margin:8px 0;opacity:.9}input,textarea{width:
 #actBtn{position:fixed;right:28px;bottom:50px;width:72px;height:72px;border-radius:50%;font-size:28px;z-index:5}
 @media (pointer:coarse){#joy{display:block}#help{display:none}}
 #zone{position:fixed;top:22%;left:50%;transform:translateX(-50%);font-size:30px;font-weight:800;letter-spacing:4px;color:#fff;text-shadow:0 2px 16px #ff6b9a;opacity:0;pointer-events:none;z-index:6}#zone.show{animation:zt 2.4s ease}@keyframes zt{0%{opacity:0;transform:translate(-50%,10px)}15%,70%{opacity:1;transform:translate(-50%,0)}100%{opacity:0}}
+
+#charSel{display:flex;gap:8px;align-items:center;justify-content:center;margin:6px 0 10px}#charSel span{opacity:.75;font-size:14px}.chr{padding:8px 16px;border-radius:20px;border:2px solid #fff3;background:#ffffff14;color:#fff;cursor:pointer;font-size:15px}.chr.sel{border-color:#ff7eb6;background:#ff7eb633}
+#meLine{text-align:center;margin:4px 0 10px}#meLine button{padding:4px 12px;margin-left:8px}#pErr{color:#ff8aa0;min-height:1em}#profile input{width:100%}

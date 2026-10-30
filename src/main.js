@@ -96,6 +96,30 @@ const groundMeshes = [];
   cone.castShadow = true; cone.receiveShadow = true; scene.add(cone);
 }
 
+// tall forest walls hugging the route: hide the city until the summit (tops stay below the summit eye line, so the
+// fence plaza gets a full panoramic reveal)
+{
+  const pts = [];
+  for (let z = FR - 2; z < PK.z1 + 26; z += 2.2) for (const sx of [-1, 1]) for (let x = 23.5; x < 44; x += 2.6) pts.push([sx * (x + Math.random() * 1.6), z + Math.random() * 1.5]);
+  for (let z = PK.z1 + 1; z < PK.z1 + 26; z += 2.4) for (let x = -24; x <= 24; x += 2.6) pts.push([x + Math.random(), z + Math.random()]);
+  const im = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#244a2b', roughness: 0.9 }), pts.length);
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 1, 6).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#3b2a20', roughness: 1 }), pts.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+  pts.forEach(([x, z], i) => { const base = Math.min(hillY(Math.hypot(x, z)), groundY(0, Math.max(z, FR + 1))) - 2; const top = -2.5 - Math.random() * 2.5; const h = top - base; const rad = 2.4 + Math.random() * 1.6;
+    m.compose(new THREE.Vector3(x, base + h * 0.25, z), q, new THREE.Vector3(rad, h * 0.75, rad)); im.setMatrixAt(i, m); im.setColorAt(i, new THREE.Color().setHSL(0.28 + Math.random() * 0.07, 0.45, 0.14 + Math.random() * 0.1));
+    m.compose(new THREE.Vector3(x, base, z), q, new THREE.Vector3(1, h * 0.3, 1)); trunk.setMatrixAt(i, m); });
+  im.castShadow = true; im.receiveShadow = true; scene.add(im, trunk);
+}
+
+// summit ring of treetops just below the plaza edge: hides the slopes directly below, city lights stay visible above
+{
+  const pts = []; for (let i = 0; i < 520; i++) { const a = Math.random() * Math.PI * 2, r = 26 + Math.random() * 12; const x = Math.cos(a) * r, z = Math.sin(a) * r; if (Math.abs(x) < 5 && z > 0) continue; pts.push([x, z, r]); }
+  const im = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#21452a', roughness: 0.9 }), pts.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+  pts.forEach(([x, z, r], i) => { const base = hillY(r) - 3, top = 1.3 - 0.15 * (r - 22) - Math.random() * 0.5, rad = 2.2 + Math.random() * 1.5; m.compose(new THREE.Vector3(x, base + (top - base) * 0.2, z), q, new THREE.Vector3(rad, (top - base) * 0.8, rad)); im.setMatrixAt(i, m); im.setColorAt(i, new THREE.Color().setHSL(0.29 + Math.random() * 0.06, 0.45, 0.12 + Math.random() * 0.1)); });
+  scene.add(im);
+}
+
 // skyline
 {
   const n = quality === 'high' ? 1400 : 700;
@@ -103,10 +127,20 @@ const groundMeshes = [];
   const b = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), mat, n);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
   for (let i = 0; i < n; i++) { const r = 200 + Math.pow(Math.random(), 0.7) * 850, a = Math.random() * Math.PI * 2; const h = 12 + Math.pow(Math.random(), 3) * 110 * (r < 500 ? 1 : 0.7); const w = 10 + Math.random() * 18; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 3); m.compose(new THREE.Vector3(Math.cos(a) * r, -62, Math.sin(a) * r), q, new THREE.Vector3(w, h, w * (0.6 + Math.random() * 0.8))); b.setMatrixAt(i, m); }
-  scene.add(b);
+  b.visible = false; // replaced by the panorama cylinder below
   // landmark super-tall (Lotte World Tower-ish)
-  const lt = new THREE.Mesh(new THREE.CylinderGeometry(2, 14, 260, 4, 1), mat); lt.position.set(620, 68, -380); lt.rotation.y = 0.4; scene.add(lt);
-  const tip = new THREE.Mesh(new THREE.SphereGeometry(2.5), new THREE.MeshBasicMaterial({ color: new THREE.Color(6, 4, 3) })); tip.position.set(620, 200, -380); scene.add(tip);
+  const lt = new THREE.Mesh(new THREE.CylinderGeometry(2, 14, 260, 4, 1), mat); lt.position.set(620, 68, -380); lt.rotation.y = 0.4;
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(2.5), new THREE.MeshBasicMaterial({ color: new THREE.Color(6, 4, 3) })); tip.position.set(620, 200, -380);
+}
+// distant Seoul night panorama: open inward-facing cylinder, unlit, no fog, drawn behind everything.
+// image is mirror-tiled (A|mirror A) so the 360° wrap has no seam; its treeline sits just under the summit treetops.
+let panoMat;
+{
+  const R = 900, imgAspect = 4344 / 507, H = (2 * Math.PI * R) / imgAspect, TREE_V = 0.2; // treeline at 20% from bottom
+  const tex = new THREE.TextureLoader().load(import.meta.env.BASE_URL + 'models/pano.webp'); tex.colorSpace = THREE.SRGBColorSpace;
+  panoMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, transparent: true, depthWrite: false });
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 128, 1, true), panoMat);
+  cyl.position.y = (1.6 - 0.15 * R) - TREE_V * H + H / 2; cyl.rotation.y = Math.PI / 2; cyl.renderOrder = -1; cyl.frustumCulled = false; scene.add(cyl);
 }
 
 const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd7a0').multiplyScalar(6) });
@@ -114,7 +148,7 @@ const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd7a0').
 const pathLights = [];
 {
   const wallMat = new THREE.MeshStandardMaterial({ map: rep(canvasTex(256, 256, (c, w) => { c.fillStyle = '#6f675f'; c.fillRect(0, 0, w, w); for (let y = 0; y < 8; y++) for (let x = 0; x < 4; x++) { const v = 90 + Math.random() * 40 | 0; c.fillStyle = `rgb(${v},${v - 6},${v - 14})`; c.fillRect(x * 64 + (y % 2) * 32 - 32 + 2, y * 32 + 2, 60, 28); c.fillRect(x * 64 + (y % 2) * 32 + 32 + 2, y * 32 + 2, 60, 28); } })), roughness: 0.9 });
-  const asphalt = new THREE.MeshStandardMaterial({ roughness: 0.85, map: canvasTex(1024, 1024, (c, w) => { c.fillStyle = '#2b2b31'; c.fillRect(0, 0, w, w); for (let i = 0; i < 9000; i++) { const v = 30 + Math.random() * 30 | 0; c.fillStyle = `rgb(${v},${v},${v + 4})`; c.fillRect(Math.random() * w, Math.random() * w, 2, 2); } c.strokeStyle = '#e8e8e0'; c.lineWidth = 5; const sx = w / 44, sz = w / 40; for (const zr of [[2, 8], [24, 30]]) for (let x = -20; x <= 20; x += 2.6) { if (Math.abs(x) < 5) continue; c.beginPath(); c.moveTo((x + 22) * sx, zr[0] * sz); c.lineTo((x + 22) * sx, zr[1] * sz); c.stroke(); } c.setLineDash([30, 30]); c.strokeStyle = '#f0c040'; c.beginPath(); c.moveTo(w / 2, 0); c.lineTo(w / 2, w); c.stroke(); }) });
+  const asphalt = new THREE.MeshStandardMaterial({ roughness: 0.85, map: canvasTex(1024, 1024, (c, w) => { c.fillStyle = '#2b2b31'; c.fillRect(0, 0, w, w); for (let i = 0; i < 9000; i++) { const v = 30 + Math.random() * 30 | 0; c.fillStyle = `rgb(${v},${v},${v + 4})`; c.fillRect(Math.random() * w, Math.random() * w, 2, 2); } c.strokeStyle = '#e8e8e0'; c.lineWidth = 5; const sx = w / 44, sz = w / 24; for (const zr of [[2, 8], [17, 23]]) for (let x = -20; x <= 20; x += 2.6) { if (Math.abs(x) < 5) continue; c.beginPath(); c.moveTo((x + 22) * sx, zr[0] * sz); c.lineTo((x + 22) * sx, zr[1] * sz); c.stroke(); } c.setLineDash([30, 30]); c.strokeStyle = '#f0c040'; c.beginPath(); c.moveTo(w / 2, 0); c.lineTo(w / 2, w); c.stroke(); }) });
   const tile = new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.7, metalness: 0.05 });
   const slab = (w, top, z0, z1, topMat, us) => { const h = top + 72; const g = new THREE.BoxGeometry(w, h, z1 - z0); const mats = [wallMat, wallMat, topMat, wallMat, wallMat, wallMat]; if (us) uvScale(g, us); const me = new THREE.Mesh(g, mats); me.position.set(0, top - h / 2, (z0 + z1) / 2); me.receiveShadow = true; scene.add(me); groundMeshes.push(me); return me; };
   slab(PK.x * 2, PK.y, PK.z0, PK.z1, asphalt);
@@ -139,7 +173,7 @@ const pathLights = [];
   }
   const sm = new THREE.Mesh(mergeGeometries(steps.map(g => { g.clearGroups(); return g; })), stepMat); sm.receiveShadow = sm.castShadow = true; scene.add(sm); groundMeshes.push(sm);
   // plaza + parking lot lamps
-  for (const [x, z, y] of [[-20, 64, PZ.y], [20, 64, PZ.y], [-20, 108, PZ.y], [20, 108, PZ.y], [-6, 79, PZ.y], [6, 93, PZ.y], [-20, 142, PK.y], [20, 142, PK.y], [-20, 178, PK.y], [20, 178, PK.y], [5, 160, PK.y]]) { rails.push(new THREE.CylinderGeometry(0.07, 0.1, 4.2, 8).translate(x, y + 2.1, z).toNonIndexed()); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(x, y + 4.3, z); scene.add(b); }
+  for (const [x, z, y] of [[-20, PZ.z0 + 2, PZ.y], [20, PZ.z0 + 2, PZ.y], [-20, PZ.z1 - 2, PZ.y], [20, PZ.z1 - 2, PZ.y], [-20, PK.z0 + 2, PK.y], [20, PK.z0 + 2, PK.y], [-20, PK.z1 - 2, PK.y], [20, PK.z1 - 2, PK.y], [5, LAYOUT.spawnZ, PK.y]]) { rails.push(new THREE.CylinderGeometry(0.07, 0.1, 4.2, 8).translate(x, y + 2.1, z).toNonIndexed()); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(x, y + 4.3, z); scene.add(b); }
   // perimeter railings for the two wide areas
   for (const [A, y] of [[PZ, PZ.y], [PK, PK.y]]) for (const sx of [-1, 1]) { const len = A.z1 - A.z0; const r = new THREE.CylinderGeometry(0.04, 0.04, len, 6); r.rotateX(Math.PI / 2); r.translate(sx * (A.x - 0.1), y + 1.0, (A.z0 + A.z1) / 2); rails.push(r.toNonIndexed()); for (let z = A.z0; z <= A.z1; z += 2) rails.push(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 6).translate(sx * (A.x - 0.1), y + 0.5, z).toNonIndexed()); }
   for (const [A, y, zEdge] of [[PZ, PZ.y, PZ.z0], [PZ, PZ.y, PZ.z1], [PK, PK.y, PK.z0], [PK, PK.y, PK.z1]]) for (const sx of [-1, 1]) { const len = A.x - S1.w / 2 - 0.4; const r = new THREE.CylinderGeometry(0.04, 0.04, len, 6); r.rotateZ(Math.PI / 2); r.translate(sx * (S1.w / 2 + 0.4 + len / 2), y + 1.0, zEdge + (zEdge === A.z0 ? 0.1 : -0.1)); rails.push(r.toNonIndexed()); }
@@ -147,17 +181,17 @@ const pathLights = [];
   // string lights over the shop plaza
   const bulbG = new THREE.SphereGeometry(0.07, 8, 6); stringMats = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }); m.userData.base = new THREE.Color(c); return m; });
   const bulbs = stringMats.map(() => []);
-  for (let z = 66; z <= 106; z += 5) for (let x = -11; x <= 11; x += 0.9) { const y = PZ.y + 4.6 - (1 - (x / 11) ** 2) * 0.8; bulbs[Math.abs(Math.round(x * 10 + z)) % 4].push(new THREE.Vector3(x, y, z)); }
+  for (let z = PZ.z0 + 4; z <= PZ.z1 - 4; z += 5) for (let x = -11; x <= 11; x += 0.9) { const y = PZ.y + 4.6 - (1 - (x / 11) ** 2) * 0.8; bulbs[Math.abs(Math.round(x * 10 + z)) % 4].push(new THREE.Vector3(x, y, z)); }
   bulbs.forEach((list, i) => { const im = new THREE.InstancedMesh(bulbG, stringMats[i], list.length); list.forEach((p, j) => im.setMatrixAt(j, new THREE.Matrix4().makeTranslation(p.x, p.y, p.z))); scene.add(im); });
-  for (let z = 66; z <= 106; z += 5) for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 6), iron); p.position.set(sx * 11.2, PZ.y + 2.4, z); scene.add(p); }
+  for (let z = PZ.z0 + 4; z <= PZ.z1 - 4; z += 5) for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 6), iron); p.position.set(sx * 11.2, PZ.y + 2.4, z); scene.add(p); }
   // parked cars
   const carCols = ['#c0392b', '#ecf0f1', '#2c3e50', '#f1c40f', '#7f8c8d', '#16a085', '#8e44ad'];
-  let ci = 0; for (const zc of [145, 167]) for (let x = -18.7; x <= 18.7; x += 2.6) { if (Math.abs(x) < 5 || Math.random() < 0.3) continue; const car = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 4), new THREE.MeshStandardMaterial({ color: carCols[ci++ % carCols.length], metalness: 0.7, roughness: 0.25 })); body.position.y = 0.55; const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.1), new THREE.MeshStandardMaterial({ color: '#1b2430', metalness: 0.9, roughness: 0.1 })); top.position.set(0, 1.15, -0.2); car.add(body, top); car.traverse(o => o.castShadow = true); car.position.set(x, PK.y, zc + 3); scene.add(car); }
+  let ci = 0; for (const zc of [PK.z0 + 3, PK.z1 - 9]) for (let x = -18.7; x <= 18.7; x += 2.6) { if (Math.abs(x) < 5 || Math.random() < 0.3) continue; const car = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 4), new THREE.MeshStandardMaterial({ color: carCols[ci++ % carCols.length], metalness: 0.7, roughness: 0.25 })); body.position.y = 0.55; const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.1), new THREE.MeshStandardMaterial({ color: '#1b2430', metalness: 0.9, roughness: 0.1 })); top.position.set(0, 1.15, -0.2); car.add(body, top); car.traverse(o => o.castShadow = true); car.position.set(x, PK.y, zc + 3); scene.add(car); }
   // bus stop
   const bus = new THREE.Group(); const roof = new THREE.Mesh(new THREE.BoxGeometry(4, 0.12, 1.6), iron); roof.position.y = 2.5; const back = new THREE.Mesh(new THREE.BoxGeometry(4, 2.2, 0.06), new THREE.MeshStandardMaterial({ color: '#9fc6e0', metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.45 })); back.position.set(0, 1.3, -0.75); const bench = new THREE.Mesh(new THREE.BoxGeometry(3, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: '#8a5a3a' })); bench.position.set(0, 0.5, -0.4);
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: canvasTex(256, 128, (g2, w, h) => { g2.fillStyle = '#0f6a3a'; g2.fillRect(0, 0, w, h); g2.fillStyle = '#fff'; g2.font = 'bold 30px sans-serif'; g2.textAlign = 'center'; g2.fillText('남산공원 주차장', w / 2, 52); g2.font = '22px sans-serif'; g2.fillText('🚌 01A · N서울타워 ↑', w / 2, 96); }) }));
   sign.position.set(0, 2.1, -0.71); bus.add(roof, back, bench, sign); bus.traverse(o => o.castShadow = true);
-  bus.position.set(9, PK.y, 176); bus.rotation.y = Math.PI; scene.add(bus);
+  bus.position.set(9, PK.y, PK.z1 - 3); bus.rotation.y = Math.PI; scene.add(bus);
 }
 
 // ---------- N Seoul Tower ----------
@@ -288,7 +322,7 @@ let heldType = null, curZone = null;
 
 // ---------- character ----------
 const player = new THREE.Group(); scene.add(player); player.position.set(0, PK.y, LAYOUT.spawnZ);
-let mixer, actions = {}, current;
+let mixer, actions = {}, current, curAnim = 'Idle';
 const myMarker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff7eb6').multiplyScalar(6) })); myMarker.visible = false; scene.add(myMarker);
 
 // ---------- post processing / quality ----------
@@ -323,7 +357,22 @@ function rebuildLocks() {
 }
 async function loadLocks() { const { data, error } = await SB.from('namsan_locks').select(COLS).eq('server_id', serverId).order('id').limit(2000); if (!error) { locks = data; rebuildLocks(); } }
 async function loadMine() { const { data } = await SB.rpc('namsan_mine', { p_device: device }); mine = {}; (data || []).forEach(r => mine[r.server_id] = r.id); }
+// ---------- profile (name + gender), saved locally ----------
+let myName = localStorage.getItem('namsan_name') || '';
+const nameLabel = new THREE.Sprite(new THREE.SpriteMaterial({ depthWrite: false, fog: false, toneMapped: false })); nameLabel.position.y = 2.05; nameLabel.renderOrder = 5; scene.add(nameLabel);
+function labelTex(text) { const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); g.font = 'bold 56px sans-serif'; const w = Math.min(500, g.measureText(text).width + 60); g.fillStyle = 'rgba(20,10,30,.72)'; g.beginPath(); g.roundRect((512 - w) / 2, 22, w, 84, 40); g.fill(); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#8fd0ff'; g.shadowBlur = 12; g.fillText(text, 256, 66); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; }
+function drawName() { const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); g.font = 'bold 56px sans-serif'; const w = Math.min(500, g.measureText(myName).width + 60); g.fillStyle = 'rgba(20,10,30,.72)'; g.beginPath(); g.roundRect((512 - w) / 2, 22, w, 84, 40); g.fill(); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#ff7eb6'; g.shadowBlur = 12; g.fillText(myName, 256, 66);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; nameLabel.material.map?.dispose(); nameLabel.material.map = t; nameLabel.material.needsUpdate = true; nameLabel.scale.set(1.6, 0.4, 1); nameLabel.visible = !!myName; }
+let pChar = 'm';
+function showProfile() { $('servers').classList.add('hidden'); $('hud').classList.add('hidden'); inGame = false; $('pName').value = myName; pChar = localStorage.getItem('namsan_char') || 'm'; document.querySelectorAll('.chr').forEach(b => b.classList.toggle('sel', b.dataset.k === pChar)); $('pErr').textContent = ''; $('profile').classList.remove('hidden'); }
+document.querySelectorAll('.chr').forEach(b => b.onclick = () => { pChar = b.dataset.k; document.querySelectorAll('.chr').forEach(x => x.classList.toggle('sel', x === b)); });
+$('pSave').onclick = async () => { const n = $('pName').value.trim(); if (!n) { $('pErr').textContent = '이름을 입력해주세요.'; return; } if (n.length > 10) { $('pErr').textContent = '이름은 10자 이하로 해주세요.'; return; }
+  $('pSave').disabled = true; const { data, error } = await SB.rpc('namsan_is_profane', { t: n }); $('pSave').disabled = false;
+  if (error) { $('pErr').textContent = '확인 중 오류가 났어요. 다시 시도해주세요.'; return; } if (data) { $('pErr').textContent = '욕설이나 비속어는 이름으로 쓸 수 없어요.'; return; }
+  myName = n; localStorage.setItem('namsan_name', n); setChar(pChar); drawName(); $('profile').classList.add('hidden'); showServers(); };
+$('profBtn').onclick = showProfile;
 async function showServers() {
+  $('meName').textContent = `${localStorage.getItem('namsan_char') === 'f' ? '👩' : '🧑'} ${myName}`;
   inGame = false; $('hud').classList.add('hidden'); $('servers').classList.remove('hidden');
   await loadMine();
   const list = $('serverList'); list.innerHTML = '';
@@ -334,8 +383,8 @@ async function showServers() {
     b.onclick = () => enter(s); list.appendChild(b);
   }
 }
-async function enter(s) { serverId = s.id; $('srvName').textContent = s.emoji + ' ' + s.name; $('msg').placeholder = s.placeholder + ' (최대 60자)'; buildDecor(s.id); $('servers').classList.add('hidden'); $('hud').classList.remove('hidden'); inGame = true; curZone = null; dayK = 0; await loadLocks(); }
-$('exitBtn').onclick = showServers;
+async function enter(s) { serverId = s.id; $('srvName').textContent = s.emoji + ' ' + s.name; $('msg').placeholder = s.placeholder + ' (최대 60자)'; buildDecor(s.id); $('servers').classList.add('hidden'); $('hud').classList.remove('hidden'); inGame = true; curZone = null; dayK = 0; joinRT(); await loadLocks(); }
+$('exitBtn').onclick = () => { leaveRT(); showServers(); };
 setInterval(() => inGame && loadLocks(), 15000);
 
 // lock type picker
@@ -345,7 +394,7 @@ function openShop(m) { shopMerchant = m; $('shopName').textContent = '🔒 ' + m
 $('shopClose').onclick = () => $('shop').classList.add('hidden');
 $('buyBtn').onclick = () => { heldType = selType; $('shop').classList.add('hidden'); flash(`${TYPES[heldType].name} 자물쇠를 받았어요! 펜스에 가서 걸어보세요.`); };
 const ERR = { PROFANITY: '욕설이나 비속어가 포함되어 있어 걸 수 없어요.', ALREADY_HUNG: '이 서버에는 이미 자물쇠를 걸었어요. (1인 1개)', SLOT_TAKEN: '그 자리는 방금 다른 사람이 걸었어요. 옆자리로 가보세요.' };
-function openModal() { if (mine[serverId]) return flash('이 서버에는 이미 자물쇠를 걸었어요. 수정·삭제는 할 수 없어요.'); if (pendingSlot == null) return; if (!heldType) return flash('먼저 상점가나 펜스 입구의 자물쇠 상인에게 자물쇠를 받으세요.'); selType = heldType; $('heldLock').textContent = '들고 있는 자물쇠: ' + TYPES[heldType].name; $('err').textContent = ''; $('hgt').max = ROWS.length - 1; $('hgt').value = REACH_ROW; updH(); $('modal').classList.remove('hidden'); $('msg').focus(); }
+function openModal() { if (mine[serverId]) return flash('이 서버에는 이미 자물쇠를 걸었어요. 수정·삭제는 할 수 없어요.'); if (pendingSlot == null) return; if (!heldType) return flash('먼저 상점가나 펜스 입구의 자물쇠 상인에게 자물쇠를 받으세요.'); selType = heldType; $('heldLock').textContent = '들고 있는 자물쇠: ' + TYPES[heldType].name; if (!$('nick').value) $('nick').value = myName; $('err').textContent = ''; $('hgt').max = ROWS.length - 1; $('hgt').value = REACH_ROW; updH(); $('modal').classList.remove('hidden'); $('msg').focus(); }
 function updH() { const v = +$('hgt').value; $('hgtLbl').textContent = `${ROWS[v].toFixed(1)}m` + (v > 3 ? ' 🪜 사다리로 높이 걸기' : ' (눈높이)'); }
 $('hgt').oninput = updH;
 $('cancelBtn').onclick = () => $('modal').classList.add('hidden');
@@ -397,13 +446,14 @@ function nearestFreeSlot(prefRow = REACH_ROW) {
   return best;
 }
 function nearestLock() { let best = null, bd = 2.0; for (const L of locks) { const d = slotInfo(L.slot).pos.distanceTo(tmp.copy(player.position).setY(1)); if (d < bd) { bd = d; best = L; } } return best; }
-let retarget = null;
+let retarget = null, setChar = () => {};
 function bindRots(root) { const out = {}; root.updateMatrixWorld(true); const ri = new THREE.Quaternion(); root.matrixWorld.decompose(new THREE.Vector3(), ri, new THREE.Vector3()); ri.invert(); root.traverse(o => { if (o.isBone) { const q = new THREE.Quaternion(); o.matrixWorld.decompose(new THREE.Vector3(), q, new THREE.Vector3()); out[o.name] = q.premultiply(ri); } }); return out; }
 const FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI), FLIP_INV = FLIP.clone().invert(); // user model faces +Z, Soldier faces -Z
 function makeRetarget(src, tgt, ref) {
   // Soldier's node rest pose isn't a T-pose but its skin bind pose is: snap it to bind pose (skeleton.pose()) and read rotations.
   const tb = bindRots(tgt); ref.traverse(o => o.isSkinnedMesh && o.skeleton.pose()); const sb = bindRots(ref); const sBones = {}; src.traverse(o => o.isBone && (sBones[o.name] = o));
-  const list = []; tgt.traverse(o => { if (o.isBone && sBones[o.name] && sb[o.name] && tb[o.name]) list.push({ t: o, s: sBones[o.name], sInv: sb[o.name].clone().invert(), tr: tb[o.name] }); });
+  const list = []; const MAP = { Spine02: 'Spine', Spine01: 'Spine1', Spine: 'Spine2', neck: 'Neck' }; // user rig (no prefix) -> mixamo names
+  tgt.traverse(o => { if (!o.isBone) return; const sn = sBones[o.name] ? o.name : 'mixamorig' + (MAP[o.name] || o.name); if (sBones[sn] && sb[sn] && tb[o.name]) list.push({ t: o, s: sBones[sn], sInv: sb[sn].clone().invert(), tr: tb[o.name] }); });
   const qs = new THREE.Quaternion(), rootQ = new THREE.Quaternion(), pq = new THREE.Quaternion(), tmpV = new THREE.Vector3(), tmpS = new THREE.Vector3(), want = new THREE.Quaternion();
   return () => {
     src.updateMatrixWorld(true); src.matrixWorld.decompose(tmpV, rootQ, tmpS); rootQ.invert();
@@ -416,7 +466,7 @@ function makeRetarget(src, tgt, ref) {
   };
 }
 let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
-function setAction(name) { if (!actions[name] || current === actions[name]) return; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
+function setAction(name) { if (!actions[name] || current === actions[name]) return; curAnim = name; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
   if (inGame && !modalOpen()) {
@@ -449,7 +499,7 @@ function tick() {
     const tip = $('tip'); if (nl) { const sp = slotInfo(nl.slot).pos.clone().project(camera); tip.style.left = (sp.x + 1) / 2 * innerWidth + 'px'; tip.style.top = (1 - sp.y) / 2 * innerHeight + 'px'; tip.innerHTML = `“${esc(nl.message)}”<br><small>— ${esc(nl.nickname)}</small>`; tip.classList.remove('hidden'); } else tip.classList.add('hidden');
   } else { $('tip').classList.add('hidden'); if (!inGame) yaw += dt * 0.05; }
   { const P = player.position, gy = groundY(P.x, P.z) + 0.02; P.y = Math.abs(gy - P.y) > 2 ? gy : P.y + (gy - P.y) * Math.min(1, dt * 14); }
-  mixer?.update(dt); retarget?.(); merchantObjs.forEach(m => m.mixer?.update(dt));
+  mixer?.update(dt); retarget?.(); updateRemotes(dt); nameLabel.position.copy(player.position).y += 2.05; merchantObjs.forEach(m => m.mixer?.update(dt));
   const target = tmp.copy(player.position).add(new THREE.Vector3(0, 1.5, 0));
   const cd = inGame ? dist : 30; const cp = inGame ? pitch : 0.18;
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
@@ -465,7 +515,7 @@ function tick() {
   scene.fog.color.lerpColors(FOG, FOG_N, ss(k, 0, 0.9)); scene.environmentIntensity = L(0.7, 0.18, k);
   renderer.toneMappingExposure = L(0.85, 1.0, k); bloom.strength = L(0.35, 0.85, k);
   const glow = L(1, 3, ss(k, 0.1, 1));
-  skylineMat.emissiveIntensity = 1.2 * glow; lampMat.color.copy(C_LAMP).multiplyScalar(2.2 * glow); stringMats.forEach(m => m.color.copy(m.userData.base).multiplyScalar(1.2 * glow));
+  skylineMat.emissiveIntensity = 1.2 * glow; panoMat.color.setRGB(lerp(0.75, 1.15, k), lerp(0.55, 1.1, k), lerp(0.6, 1.2, k)); panoMat.opacity = lerp(0.7, 1, ss(k, 0, 0.8)); lampMat.color.copy(C_LAMP).multiplyScalar(2.2 * glow); stringMats.forEach(m => m.color.copy(m.userData.base).multiplyScalar(1.2 * glow));
   pointLights.concat(pathLights).forEach(pl => pl.intensity = (pl.userData.base ??= pl.intensity) * L(0.5, 1.6, k));
   fenceGlow.material.color.setHSL((t * 0.03) % 1, 0.7, 0.6).multiplyScalar(1.5 * glow);
   towerLights.forEach((r, i) => r.material.color.setHSL((t * 0.05 + i * 0.25) % 1, 0.8, 0.6).multiplyScalar(2.5 * glow));
@@ -474,21 +524,60 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+
+// ---------- multiplayer presence (Supabase Realtime: presence + 10 Hz broadcast per server) ----------
+const SID = crypto.randomUUID().replace(/-/g, '').slice(0, 12); // session id only (never the device secret)
+const remotes = new Map(); let chan = null;
+function makeRemote(id, meta) {
+  if (!SOLDIER) return; const k = meta.char === 'f' ? 'f' : 'm';
+  const grp = new THREE.Group(); scene.add(grp);
+  const hi = skClone(CHARS[k]), lo = skClone(LOS[k]); hi.rotation.set(0, 0, 0); lo.rotation.set(0, 0, 0); hi.traverse(o => { if (o.isMesh) o.castShadow = true; }); grp.add(hi, lo); lo.visible = false;
+  const src = skClone(SOLDIER.scene); src.visible = false; scene.add(src); const mx = new THREE.AnimationMixer(src); const acts = {}; for (const c of SOLDIER.animations) acts[c.name] = mx.clipAction(c);
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex(String(meta.name || '익명').slice(0, 10)), depthWrite: false, fog: false, toneMapped: false })); label.scale.set(1.6, 0.4, 1); label.position.y = 2.05; grp.add(label);
+  const r = { id, grp, hi, lo, src, mx, acts, cur: null, rtHi: makeRetarget(src, hi, REF), rtLo: makeRetarget(src, lo, REF), tg: null, last: performance.now(), label };
+  r.play = (n) => { const a = r.acts[n]; if (!a || r.cur === a) return; a.reset().fadeIn(0.25).play(); r.cur?.fadeOut(0.25); r.cur = a; }; r.play('Idle'); grp.visible = false;
+  remotes.set(id, r); return r;
+}
+function removeRemote(id) { const r = remotes.get(id); if (!r) return; scene.remove(r.grp, r.src); r.label.material.map.dispose(); r.mx.stopAllAction(); remotes.delete(id); }
+function leaveRT() { if (chan) { SB.removeChannel(chan); chan = null; } for (const id of [...remotes.keys()]) removeRemote(id); }
+function joinRT() {
+  leaveRT(); const c = chan = SB.channel('namsan-srv-' + serverId, { config: { presence: { key: SID }, broadcast: { self: false } } });
+  c.on('presence', { event: 'sync' }, () => { const st = c.presenceState(); for (const id of [...remotes.keys()]) if (!st[id]) removeRemote(id); for (const id of Object.keys(st)) if (id !== SID && !remotes.has(id)) makeRemote(id, st[id][0]); })
+   .on('broadcast', { event: 'p' }, ({ payload: p }) => { const r = remotes.get(p.i); if (!r) return; r.last = performance.now(); if (!r.tg) { r.grp.position.set(p.x, p.y, p.z); r.grp.rotation.y = p.r; r.grp.visible = true; } r.tg = p; })
+   .subscribe(async (st) => { if (st === 'SUBSCRIBED') await c.track({ name: myName, char: charSel }); });
+}
+setInterval(() => { if (!inGame || !chan || chan.state !== 'joined') return; const P = player.position; chan.send({ type: 'broadcast', event: 'p', payload: { i: SID, x: +P.x.toFixed(2), y: +P.y.toFixed(2), z: +P.z.toFixed(2), r: +(player.children[0]?.rotation.y ?? 0).toFixed(2), a: curAnim } }); }, 100);
+addEventListener('beforeunload', leaveRT);
+const NEAR_HI = 15, HI_DIST = 35;
+function updateRemotes(dt) {
+  const now = performance.now(), list = [];
+  for (const r of remotes.values()) { if (now - r.last > 15000) { r.grp.visible = false; continue; } if (!r.tg) continue; const p = r.tg, G = r.grp.position, f = Math.min(1, dt * 10);
+    G.x += (p.x - G.x) * f; G.y += (p.y - G.y) * f; G.z += (p.z - G.z) * f; let d = p.r - r.grp.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d)); r.grp.rotation.y += d * f; r.play(p.a); r.grp.visible = true;
+    list.push([G.distanceTo(player.position), r]); }
+  list.sort((a, b) => a[0] - b[0]);
+  list.forEach(([d, r], i) => { const hiOn = i < NEAR_HI && d < HI_DIST; r.hi.visible = hiOn; r.lo.visible = !hiOn && d < 200; if (!r.hi.visible && !r.lo.visible) return; r.mx.update(dt); (hiOn ? r.rtHi : r.rtLo)(); });
+}
+
 // ---------- boot ----------
 applyQuality();
 const gl = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const loadGLB = (f) => new Promise((res, rej) => gl.load(import.meta.env.BASE_URL + 'models/' + f, res, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, rej));
-Promise.all([loadGLB('character.glb'), loadGLB('soldier.glb')]).then(([c, g]) => {
-  const m = c.scene; m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
-  facing = Math.PI; m.rotation.y = facing; player.add(m);
-  // user character has no animations -> drive it from a hidden Soldier rig (same mixamorig bone names),
+let SOLDIER, REF; const LOS = {};
+let charSel = localStorage.getItem('namsan_char') || 'm'; const CHARS = {};
+Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'), loadGLB('char_m_lo.glb'), loadGLB('char_f_lo.glb')]).then(([cm, cf, g, lm, lf]) => {
+  SOLDIER = g; for (const [k, c] of [['m', lm], ['f', lf]]) { const m = c.scene; const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); m.traverse(o => o.isMesh && (o.frustumCulled = false)); LOS[k] = m; }
+  for (const [k, c] of [['m', cm], ['f', cf]]) { const m = c.scene; m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+    const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); CHARS[k] = m; }
+  // user characters have no animations -> drive them from a hidden Soldier rig (mixamo clips),
   // retargeted in world space using each rig's bind pose so differing rest orientations don't break it.
   const src = skClone(g.scene); src.visible = false; scene.add(src);
   mixer = new THREE.AnimationMixer(src); for (const clip of g.animations) actions[clip.name] = mixer.clipAction(clip);
-  const ref = skClone(g.scene); retarget = makeRetarget(src, m, ref);
+  const ref = REF = skClone(g.scene); const rts = { m: makeRetarget(src, CHARS.m, ref), f: makeRetarget(src, CHARS.f, ref) };
+  setChar = (k) => { charSel = k; localStorage.setItem('namsan_char', k); const old = player.children[0]; const r = old ? old.rotation.y : Math.PI; if (old) player.remove(old); const m = CHARS[k]; m.rotation.y = r; player.add(m); retarget = rts[k]; };
+  facing = Math.PI; setChar(charSel);
   setAction('Idle');
   for (const mo of merchantObjs) { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI; mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const idle = g.animations.find(c => c.name === 'Idle'); idle && mo.mixer.clipAction(idle).play(); }
-  $('loading').classList.add('hidden'); showServers();
+  $('loading').classList.add('hidden'); drawName(); myName ? showServers() : showProfile();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
 tick();
-window.__game = { player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
+window.__game = { remotes, SID, setChar: (k) => setChar(k), player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
