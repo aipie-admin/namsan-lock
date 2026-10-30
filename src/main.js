@@ -380,7 +380,7 @@ function tick() {
     const l = Math.hypot(ix, iz); const run = keys.ShiftLeft || keys.ShiftRight || Math.hypot(joy.x, joy.y) > 0.9;
     if (l > 0.1) { ix /= Math.max(l, 1); iz /= Math.max(l, 1);
       const sp = run ? 5.2 : 2.2; const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-      const dx = (fx * -iz + -fz * -ix) * sp * dt, dz = (fz * -iz + fx * -ix) * sp * dt;
+      const dx = (fx * -iz + -fz * ix) * sp * dt, dz = (fz * -iz + fx * ix) * sp * dt; // right = forward × up
       const P = player.position; facing = Math.atan2(dx, dz);
       if (walkable(P.x + dx, P.z + dz)) { P.x += dx; P.z += dz; } else if (walkable(P.x + dx, P.z)) P.x += dx; else if (walkable(P.x, P.z + dz)) P.z += dz;
       if (merchantObjs.some(m => Math.hypot(P.x - m.pos.x, P.z - m.pos.z) < 1.1)) { P.x -= dx; P.z -= dz; }
@@ -429,4 +429,4 @@ new GLTFLoader().load(import.meta.env.BASE_URL + 'models/soldier.glb', (g) => {
   $('loading').classList.add('hidden'); showServers();
 }, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, () => { $('loading').classList.add('hidden'); showServers(); });
 tick();
-window.__game = { player, setYaw: (v) => yaw = v, pathAt };
+window.__game = { player, camera, setYaw: (v) => yaw = v, pathAt };
