@@ -578,6 +578,7 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
   setAction('Idle');
   const idle = g.animations.find(c => c.name === 'Idle');
   for (const mo of merchantObjs) {
+    for (const pr of mo.cfg.props || []) gl.load(import.meta.env.BASE_URL + pr.model, m => { const o = m.scene; o.scale.setScalar(pr.scale || 1); const bb = new THREE.Box3().setFromObject(o); o.position.set(pr.x || 0, -bb.min.y, pr.z || 0); o.rotation.y = pr.rotY || 0; o.traverse(c => c.isMesh && (c.castShadow = c.receiveShadow = true)); mo.group.add(o); });
     const put = (npc, anims) => { npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI + (mo.cfg.rotY || 0); npc.scale.multiplyScalar(mo.cfg.scale || 1); mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const c = anims.find(a => /idle/i.test(a.name)) || anims[0]; c && mo.mixer.clipAction(c).play(); };
     const fallback = () => { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); put(npc, idle ? [idle] : []); };
     if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); put(m.scene, m.animations); }, undefined, fallback); else fallback();
