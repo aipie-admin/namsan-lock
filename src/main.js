@@ -10,6 +10,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createClient } from '@supabase/supabase-js';
 import { clone as skClone } from 'three/addons/utils/SkeletonUtils.js';
 import { MERCHANTS, LAYOUT, ZONES } from './merchants.js';
+// canvas labels use Pretendard: wait for the webfont (max 3 s) before building any label textures
+await Promise.race([Promise.all(['bold 56px "Pretendard Variable"', 'bold 52px "Pretendard Variable"', '400 30px "Pretendard Variable"'].map(f => document.fonts.load(f, '가나다ABC'))), new Promise(r => setTimeout(r, 3000))]).catch(() => {});
 
 const SB = createClient('https://qcugwkkgmvpbaglgento.supabase.co', 'sb_publishable_dKwXKOiKrqsE4C4D5cUgpQ_4ig3YFqC', { auth: { persistSession: false } });
 const COLS = ['id', 'server_id', 'lock_type', 'message', 'nickname', 'slot', 'created_at'].join(',');
@@ -87,13 +89,35 @@ const groundMeshes = [];
   const river = new THREE.Mesh(new THREE.PlaneGeometry(3000, 90), new THREE.MeshStandardMaterial({ color: '#2a3550', roughness: 0.08, metalness: 1 }));
   river.rotation.x = -Math.PI / 2; river.position.set(0, -61.8, 420); river.rotation.z = 0.25; scene.add(river);
 }
+// all trees: [x, baseY, z, height, rotY] -> real tree GLB, InstancedMesh near + crossed-billboard far LOD (built on load)
+const TREES = [];
 // trees on the slope, away from the built route
 {
   const n = quality === 'high' ? 900 : 450;
-  const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 5, 7), new THREE.MeshStandardMaterial({ color: '#2d5a32', roughness: 0.9 }), n);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
-  for (let i = 0; i < n; i++) { let r, a, x, z; do { r = 30 + Math.random() * 190; a = Math.random() * Math.PI * 2; x = Math.cos(a) * r; z = Math.sin(a) * r; } while (Math.abs(x) < 27 && z > 18 && z < 186); const k = 0.7 + Math.random() * 1.1; const col = new THREE.Color().setHSL(0.28 + Math.random() * 0.08, 0.45, 0.18 + Math.random() * 0.12); s.set(k, k * (0.8 + Math.random() * 0.6), k); m.compose(new THREE.Vector3(x, hillY(r) - 1 + 2.3 * s.y, z), q, s); cone.setMatrixAt(i, m); cone.setColorAt(i, col); }
-  cone.castShadow = true; cone.receiveShadow = true; scene.add(cone);
+  for (let i = 0; i < n; i++) { let r, a, x, z; do { r = 30 + Math.random() * 190; a = Math.random() * Math.PI * 2; x = Math.cos(a) * r; z = Math.sin(a) * r; } while (Math.abs(x) < 27 && z > 18 && z < 186); const k = 0.7 + Math.random() * 1.1; TREES.push([x, hillY(r) - 1, z, 5 * k * (0.8 + Math.random() * 0.6), Math.random() * 6.28]); }
+}
+
+// mountain terrain: solid slopes rising to every route edge (no voids beside stairs / plazas)
+const clampZ = (z, a, b) => Math.min(b, Math.max(a, z));
+function terrainY(x, z) {
+  const sh = [ // [halfWidth, z0, z1, topAt(z)]
+    [PK.x, PK.z0, PK.z1, () => PK.y], [S1.w / 2 + 0.5, S1.z0, S1.z1, (zz) => groundY(0, zz)],
+    [PZ.x, PZ.z0, PZ.z1, () => PZ.y], [S2.w / 2 + 0.5, S2.z0, S2.z1, (zz) => groundY(0, zz)]];
+  let h = 0 - 0.25 - 0.9 * Math.max(0, Math.hypot(x, z) - (FR + 0.6)), cap = Infinity;
+  for (const [hw, z0, z1, top] of sh) { const dx = Math.max(0, Math.abs(x) - hw), cz = clampZ(z, z0, z1), dz = Math.abs(z - cz); h = Math.max(h, top(cz) - 0.25 - 0.45 * Math.hypot(dx, dz)); if (dx < 1.5 && dz < 1.5) cap = Math.min(cap, top(cz) - 0.35); }
+  h = Math.max(h, hillY(Math.hypot(x, z)) - 3) + Math.sin(x * 0.37) * Math.cos(z * 0.29) * 0.5; return Math.min(h, cap);
+}
+{
+  const W = 150, D = 230, g = new THREE.PlaneGeometry(W, D, 120, 184).rotateX(-Math.PI / 2).translate(0, 0, 45); const pa = g.attributes.position;
+  for (let i = 0; i < pa.count; i++) pa.setY(i, terrainY(pa.getX(i), pa.getZ(i)));
+  g.computeVertexNormals();
+  const t = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: '#2c3f26', roughness: 0.97 })); t.receiveShadow = true; scene.add(t);
+  // rocks + bushes on the slopes
+  const rock = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: '#5d5a55', roughness: 0.95, flatShading: true }), 260);
+  const bush = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: '#2f5a2c', roughness: 0.9 }), 520);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const place = (im, n, s0, s1) => { let k = 0; while (k < n) { const x = (Math.random() - 0.5) * 120, z = -40 + Math.random() * 180; if (walkable(x, z) || Math.hypot(x, z) < FR + 1.5 || (Math.abs(x) < PZ.x + 0.8 && z > PZ.z0 - 1 && z < PZ.z1 + 1) || (Math.abs(x) < PK.x + 0.8 && z > PK.z0 - 1 && z < PK.z1 + 1) || (Math.abs(x) < S1.w / 2 + 1 && z > S2.z0 && z < S1.z1 + 1)) continue; const sc = s0 + Math.random() * (s1 - s0); e.set(Math.random() * 3, Math.random() * 3, Math.random() * 3); q.setFromEuler(e); m.compose(new THREE.Vector3(x, terrainY(x, z) - sc * 0.3, z), q, new THREE.Vector3(sc, sc * 0.7, sc)); im.setMatrixAt(k, m); im.setColorAt(k, new THREE.Color(im.material.color).offsetHSL(0, 0, (Math.random() - 0.5) * 0.08)); k++; } };
+  place(rock, 260, 0.4, 1.6); place(bush, 520, 0.6, 1.5); rock.castShadow = bush.castShadow = true; scene.add(rock, bush);
 }
 
 // tall forest walls hugging the route: hide the city until the summit (tops stay below the summit eye line, so the
@@ -102,22 +126,13 @@ const groundMeshes = [];
   const pts = [];
   for (let z = FR - 2; z < PK.z1 + 26; z += 2.2) for (const sx of [-1, 1]) for (let x = (z > PZ.z0 - 2 && z < PZ.z1 + 2 ? PZ.x + 1.2 : 23.5); x < 44; x += 2.6) pts.push([sx * (x + Math.random() * 1.6), z + Math.random() * 1.5]);
   for (let z = PK.z1 + 1; z < PK.z1 + 26; z += 2.4) for (let x = -24; x <= 24; x += 2.6) pts.push([x + Math.random(), z + Math.random()]);
-  const im = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#244a2b', roughness: 0.9 }), pts.length);
-  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 1, 6).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#3b2a20', roughness: 1 }), pts.length);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
-  pts.forEach(([x, z], i) => { const base = Math.min(hillY(Math.hypot(x, z)), groundY(0, Math.max(z, FR + 1))) - 2; const top = -2.5 - Math.random() * 2.5; const h = top - base; const rad = 2.4 + Math.random() * 1.6;
-    m.compose(new THREE.Vector3(x, base + h * 0.25, z), q, new THREE.Vector3(rad, h * 0.75, rad)); im.setMatrixAt(i, m); im.setColorAt(i, new THREE.Color().setHSL(0.28 + Math.random() * 0.07, 0.45, 0.14 + Math.random() * 0.1));
-    m.compose(new THREE.Vector3(x, base, z), q, new THREE.Vector3(1, h * 0.3, 1)); trunk.setMatrixAt(i, m); });
-  im.castShadow = true; im.receiveShadow = true; scene.add(im, trunk);
+  pts.forEach(([x, z]) => { const base = terrainY(x, z) - 0.3; const top = Math.max(-2.5 - Math.random() * 2.5, base + 7 + Math.random() * 3); TREES.push([x, base, z, top - base, Math.random() * 6.28]); });
 }
 
 // summit ring of treetops just below the plaza edge: hides the slopes directly below, city lights stay visible above
 {
   const pts = []; for (let i = 0; i < 520; i++) { const a = Math.random() * Math.PI * 2, r = 26 + Math.random() * 12; const x = Math.cos(a) * r, z = Math.sin(a) * r; if (Math.abs(x) < 5 && z > 0) continue; pts.push([x, z, r]); }
-  const im = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#21452a', roughness: 0.9 }), pts.length);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
-  pts.forEach(([x, z, r], i) => { const base = hillY(r) - 3, top = 1.3 - 0.15 * (r - 22) - Math.random() * 0.5, rad = 2.2 + Math.random() * 1.5; m.compose(new THREE.Vector3(x, base + (top - base) * 0.2, z), q, new THREE.Vector3(rad, (top - base) * 0.8, rad)); im.setMatrixAt(i, m); im.setColorAt(i, new THREE.Color().setHSL(0.29 + Math.random() * 0.06, 0.45, 0.12 + Math.random() * 0.1)); });
-  scene.add(im);
+  pts.forEach(([x, z, r]) => { const base = terrainY(x, z) - 0.3, top = Math.max(1.3 - 0.15 * (r - 22) - Math.random() * 0.5, base + 4); TREES.push([x, base, z, top - base, Math.random() * 6.28]); });
 }
 
 // skyline
@@ -189,7 +204,7 @@ const pathLights = [];
   let ci = 0; for (const zc of [PK.z0 + 3, PK.z1 - 9]) for (let x = -18.7; x <= 18.7; x += 2.6) { if (Math.abs(x) < 5 || Math.random() < 0.3) continue; const car = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 4), new THREE.MeshStandardMaterial({ color: carCols[ci++ % carCols.length], metalness: 0.7, roughness: 0.25 })); body.position.y = 0.55; const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.1), new THREE.MeshStandardMaterial({ color: '#1b2430', metalness: 0.9, roughness: 0.1 })); top.position.set(0, 1.15, -0.2); car.add(body, top); car.traverse(o => o.castShadow = true); car.position.set(x, PK.y, zc + 3); scene.add(car); }
   // bus stop
   const bus = new THREE.Group(); const roof = new THREE.Mesh(new THREE.BoxGeometry(4, 0.12, 1.6), iron); roof.position.y = 2.5; const back = new THREE.Mesh(new THREE.BoxGeometry(4, 2.2, 0.06), new THREE.MeshStandardMaterial({ color: '#9fc6e0', metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.45 })); back.position.set(0, 1.3, -0.75); const bench = new THREE.Mesh(new THREE.BoxGeometry(3, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: '#8a5a3a' })); bench.position.set(0, 0.5, -0.4);
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: canvasTex(256, 128, (g2, w, h) => { g2.fillStyle = '#0f6a3a'; g2.fillRect(0, 0, w, h); g2.fillStyle = '#fff'; g2.font = 'bold 30px sans-serif'; g2.textAlign = 'center'; g2.fillText('남산공원 주차장', w / 2, 52); g2.font = '22px sans-serif'; g2.fillText('🚌 01A · N서울타워 ↑', w / 2, 96); }) }));
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: canvasTex(256, 128, (g2, w, h) => { g2.fillStyle = '#0f6a3a'; g2.fillRect(0, 0, w, h); g2.fillStyle = '#fff'; g2.font = 'bold 30px "Pretendard Variable", Pretendard, sans-serif'; g2.textAlign = 'center'; g2.fillText('남산공원 주차장', w / 2, 52); g2.font = '22px "Pretendard Variable", Pretendard, sans-serif'; g2.fillText('🚌 01A · N서울타워 ↑', w / 2, 96); }) }));
   sign.position.set(0, 2.1, -0.71); bus.add(roof, back, bench, sign); bus.traverse(o => o.castShadow = true);
   bus.position.set(9, PK.y, PK.z1 - 3); bus.rotation.y = Math.PI; scene.add(bus);
 }
@@ -251,7 +266,7 @@ let fenceGlow;
   const fence = new THREE.Mesh(mergeGeometries(parts.map(g => { g.clearGroups(); return g; })), metal); fence.castShadow = true; fence.receiveShadow = true; scene.add(fence);
   // LED crown + gate sign
   fenceGlow = new THREE.Mesh(new THREE.TorusGeometry(FR, 0.05, 6, 256, arc).rotateX(Math.PI / 2).rotateY(-start).translate(0, FH + 0.12, 0), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff7eb6').multiplyScalar(3) })); scene.add(fenceGlow);
-  const gs = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.0), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, map: canvasTex(512, 116, (c, w, h) => { c.fillStyle = '#2a1030'; c.fillRect(0, 0, w, h); c.fillStyle = '#ffd1e0'; c.font = 'bold 56px sans-serif'; c.textAlign = 'center'; c.fillText('💗 사랑의 자물쇠', w / 2, 78); }) }));
+  const gs = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.0), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, map: canvasTex(512, 116, (c, w, h) => { c.fillStyle = '#2a1030'; c.fillRect(0, 0, w, h); c.fillStyle = '#ffd1e0'; c.font = 'bold 56px "Pretendard Variable", Pretendard, sans-serif'; c.textAlign = 'center'; c.fillText('💗 사랑의 자물쇠', w / 2, 78); }) }));
   gs.position.set(0, FH - 0.4, FR + 0.05); scene.add(gs);
 }
 
@@ -313,7 +328,7 @@ const merchantObjs = MERCHANTS.map(cfg => {
   if (cfg.stall === 'desk') { table.scale.set(0.6, 0.85, 0.7); table.position.set(0, 0.38, 0.75); g.add(table); } else if (cfg.stall !== false) g.add(table, awn, ...poles);
   // display locks on the table
   cfg.inventory.forEach((k, i) => { const t = TYPES[k]; if (!t) return; const m = new THREE.Mesh(getGeo(t.shape), lockMat(t.color)); const dk = cfg.stall === 'desk'; m.position.set((dk ? 0.6 : 1) * (-1 + i * (2 / Math.max(1, cfg.inventory.length - 1))), dk ? 0.81 : 0.98, dk ? 0.85 : 1.05); m.scale.setScalar(dk ? 1.1 : 1.6); g.add(m); });
-  const plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: canvasTex(512, 128, (c, w, h) => { c.fillStyle = 'rgba(30,15,40,.85)'; c.beginPath(); c.roundRect(4, 4, w - 8, h - 8, 30); c.fill(); c.fillStyle = '#ffd1e0'; c.font = 'bold 52px sans-serif'; c.textAlign = 'center'; c.fillText('🔒 ' + cfg.name, w / 2, 84); }), depthWrite: false }));
+  const plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: canvasTex(512, 128, (c, w, h) => { c.fillStyle = 'rgba(30,15,40,.85)'; c.beginPath(); c.roundRect(4, 4, w - 8, h - 8, 30); c.fill(); c.fillStyle = '#ffd1e0'; c.font = 'bold 52px "Pretendard Variable", Pretendard, sans-serif'; c.textAlign = 'center'; c.fillText('🔒 ' + cfg.name, w / 2, 84); }), depthWrite: false }));
   if (cfg.stall === 'desk') { plate.scale.set(1.4, 0.35, 1); plate.position.set(0, 1.85, 0); } else { plate.scale.set(2.4, 0.6, 1); plate.position.set(0, 3.4, 0.5); } g.add(plate);
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); scene.add(g);
   g.updateMatrixWorld(); return { cfg, group: g, pos: g.localToWorld(new THREE.Vector3(0, 0, 0.9)), mixer: null };
@@ -328,7 +343,7 @@ const myMarker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.Me
 // ---------- post processing / quality ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9); composer.addPass(bloom);
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.2, 0.18, 1.05); composer.addPass(bloom);
 composer.addPass(new OutputPass());
 function applyQuality() {
   const hi = quality === 'high';
@@ -360,8 +375,10 @@ async function loadMine() { const { data } = await SB.rpc('namsan_mine', { p_dev
 // ---------- profile (name + gender), saved locally ----------
 let myName = localStorage.getItem('namsan_name') || '';
 const nameLabel = new THREE.Sprite(new THREE.SpriteMaterial({ depthWrite: false, fog: false, toneMapped: false })); nameLabel.position.y = 2.05; nameLabel.renderOrder = 5; scene.add(nameLabel);
-function labelTex(text) { const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); g.font = 'bold 56px sans-serif'; const w = Math.min(500, g.measureText(text).width + 60); g.fillStyle = 'rgba(20,10,30,.72)'; g.beginPath(); g.roundRect((512 - w) / 2, 22, w, 84, 40); g.fill(); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#8fd0ff'; g.shadowBlur = 12; g.fillText(text, 256, 66); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; }
-function drawName() { const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); g.font = 'bold 56px sans-serif'; const w = Math.min(500, g.measureText(myName).width + 60); g.fillStyle = 'rgba(20,10,30,.72)'; g.beginPath(); g.roundRect((512 - w) / 2, 22, w, 84, 40); g.fill(); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#ff7eb6'; g.shadowBlur = 12; g.fillText(myName, 256, 66);
+function labelTex(text) { const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const draw = () => { g.clearRect(0, 0, 512, 128); g.font = 'bold 56px "Pretendard Variable", Pretendard, sans-serif'; const w = Math.min(500, g.measureText(text).width + 60); g.fillStyle = 'rgba(20,10,30,.72)'; g.beginPath(); g.roundRect((512 - w) / 2, 22, w, 84, 40); g.fill(); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#8fd0ff'; g.shadowBlur = 12; g.fillText(text, 256, 66); t.needsUpdate = true; };
+  draw(); document.fonts.load('bold 56px "Pretendard Variable", Pretendard, sans-serif', text).then(draw).catch(() => {}); return t; }
+let _nmLoaded = ''; function drawName() { if (_nmLoaded !== myName) { _nmLoaded = myName; document.fonts.load('bold 56px "Pretendard Variable", Pretendard, sans-serif', myName || '가').then(() => drawName()).catch(() => {}); } const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); g.font = 'bold 56px "Pretendard Variable", Pretendard, sans-serif'; const w = Math.min(500, g.measureText(myName).width + 60); g.fillStyle = 'rgba(20,10,30,.72)'; g.beginPath(); g.roundRect((512 - w) / 2, 22, w, 84, 40); g.fill(); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = '#ff7eb6'; g.shadowBlur = 12; g.fillText(myName, 256, 66);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; nameLabel.material.map?.dispose(); nameLabel.material.map = t; nameLabel.material.needsUpdate = true; nameLabel.scale.set(1.6, 0.4, 1); nameLabel.visible = !!myName; }
 let pChar = 'm';
 function showProfile() { $('servers').classList.add('hidden'); $('hud').classList.add('hidden'); inGame = false; $('pName').value = myName; pChar = localStorage.getItem('namsan_char') || 'm'; document.querySelectorAll('.chr').forEach(b => b.classList.toggle('sel', b.dataset.k === pChar)); $('pErr').textContent = ''; $('profile').classList.remove('hidden'); }
@@ -467,6 +484,8 @@ function makeRetarget(src, tgt, ref) {
     for (const e of list) att.set(e.t, e.t.quaternion.clone()); for (const [o, q] of save) o.quaternion.copy(q); tgt.updateMatrixWorld(true); }
   const chest = list.filter(e => /Spine0?2$|Spine1$|^Spine$/.test(e.t.name.replace(/^mixamorig:?/, ''))).map(e => e.t), bq = new THREE.Quaternion(), bx = new THREE.Vector3(1, 0, 0);
   const breathe = (a) => { if (!a) return; bq.setFromAxisAngle(bx, a); for (const b of chest) b.quaternion.multiply(bq); };
+  const CALM = [[/^(Hips|Spine0?\d?|Spine)$/, 0.55], [/^(Neck|neck|Head)$/, 0.4], [/Shoulder$/, 0.7], [/Arm$/, 0.5], [/ForeArm$/, 0.35], [/UpLeg$/, 0.18]];
+  const calm = []; for (const e of list) { const n = e.t.name.replace(/^mixamorig:?/, ''); for (const [re, k] of CALM) if (re.test(n)) { calm.push({ t: e.t, k }); break; } }
   return (w = 0) => {
     const br = Math.sin(performance.now() * 0.0021) * 0.012; // subtle breathing
     if (w >= 0.999) { for (const e of list) e.t.quaternion.copy(att.get(e.t)); breathe(br); return; }
@@ -477,12 +496,16 @@ function makeRetarget(src, tgt, ref) {
       e.t.parent.updateMatrixWorld(); e.t.parent.matrixWorld.decompose(tmpV, pq, tmpS); pq.premultiply(tRootInv);
       e.t.quaternion.copy(pq.invert().multiply(want)); e.t.updateMatrixWorld(true);
     }
+    // casual everyday gait: pull the military Soldier clip toward the relaxed pose per bone group
+    // (less spine/shoulder twist + chest-out, arms close to body with modest swing, narrower stance)
+    for (const e of calm) e.t.quaternion.slerp(att.get(e.t), e.k);
     if (w > 0) { for (const e of list) e.t.quaternion.slerp(att.get(e.t), w); breathe(br * w); }
   };
 }
 let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
 function setAction(name) { if (!actions[name] || current === actions[name]) return; curAnim = name; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
 function tick() {
+  if (treeLOD) treeLOD.update(camera.position);
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
   if (inGame && !modalOpen()) {
     let ix = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + joy.x;
@@ -528,7 +551,7 @@ function tick() {
   sunLight.intensity = L(3.2, 0.35, ss(k, 0, 0.8)); sunLight.color.lerpColors(C_SUN, C_MOON, ss(k, 0.2, 0.9));
   hemi.intensity = L(1.1, 0.4, k); hemi.color.lerpColors(C_HEMI, C_HEMI_N, k);
   scene.fog.color.lerpColors(FOG, FOG_N, ss(k, 0, 0.9)); scene.environmentIntensity = L(0.7, 0.18, k);
-  renderer.toneMappingExposure = L(0.85, 1.0, k); bloom.strength = L(0.35, 0.85, k);
+  renderer.toneMappingExposure = L(0.85, 1.0, k); bloom.strength = L(0.15, 0.32, k);
   const glow = L(1, 3, ss(k, 0.1, 1));
   skylineMat.emissiveIntensity = 1.2 * glow; panoMat.color.setRGB(lerp(0.75, 1.15, k), lerp(0.55, 1.1, k), lerp(0.6, 1.2, k)); panoMat.opacity = lerp(0.7, 1, ss(k, 0, 0.8)); lampMat.color.copy(C_LAMP).multiplyScalar(2.2 * glow); stringMats.forEach(m => m.color.copy(m.userData.base).multiplyScalar(1.2 * glow));
   pointLights.concat(pathLights).forEach(pl => pl.intensity = (pl.userData.base ??= pl.intensity) * L(0.5, 1.6, k));
@@ -576,6 +599,38 @@ function updateRemotes(dt) {
 // ---------- boot ----------
 applyQuality();
 const gl = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+// tree LOD: near = GLB mesh instances (6k tris), far = 2 crossed quads with a texture rendered from the GLB at load
+let treeLOD = null;
+gl.load(import.meta.env.BASE_URL + 'models/tree.glb', (g) => { g.scene.updateMatrixWorld(true);
+  let src; g.scene.traverse((o) => { if (o.isMesh && !src) src = o; }); if (!src) return;
+  const geo = src.geometry.clone(); geo.applyMatrix4(src.matrixWorld); geo.computeBoundingBox();
+  const bb = geo.boundingBox, H0 = bb.max.y - bb.min.y; geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2); geo.scale(1 / H0, 1 / H0, 1 / H0); // unit height, base at 0
+  geo.computeBoundingBox(); const W = Math.max(geo.boundingBox.max.x - geo.boundingBox.min.x, geo.boundingBox.max.z - geo.boundingBox.min.z);
+  const mat = src.material; mat.roughness = 0.9;
+  // billboard texture
+  const rt = new THREE.WebGLRenderTarget(256, 256, { colorSpace: THREE.SRGBColorSpace }); rt.texture.colorSpace = THREE.SRGBColorSpace;
+  const bs = new THREE.Scene(); bs.add(new THREE.Mesh(geo, mat), new THREE.HemisphereLight('#ffffff', '#445533', 1.4)); const dl = new THREE.DirectionalLight('#ffffff', 1.6); dl.position.set(1, 2, 2); bs.add(dl);
+  const oc = new THREE.OrthographicCamera(-W / 2, W / 2, 1, 0, -10, 10); oc.position.z = 2;
+  const pc = renderer.getClearColor(new THREE.Color()), pa = renderer.getClearAlpha(); renderer.setClearColor(0x000000, 0); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(bs, oc); renderer.setRenderTarget(null); renderer.setClearColor(pc, pa);
+  const q1 = new THREE.PlaneGeometry(W, 1).translate(0, 0.5, 0), q2 = q1.clone().rotateY(Math.PI / 2);
+  const bg = mergeGeos([q1, q2]); const bmat = new THREE.MeshLambertMaterial({ map: rt.texture, alphaTest: 0.5, side: THREE.DoubleSide });
+  const N = TREES.length, nearCap = Math.min(N, quality === 'high' ? 260 : 120);
+  const near = new THREE.InstancedMesh(geo, mat, nearCap), far = new THREE.InstancedMesh(bg, bmat, N);
+  near.castShadow = true; near.receiveShadow = true; near.frustumCulled = far.frustumCulled = false; scene.add(near, far);
+  const mats = TREES.map(([x, y, z, h, r]) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), r), new THREE.Vector3(h * (0.85 + (r % 1) * 0.3), h, h * (0.85 + (r % 1) * 0.3))));
+  const tint = TREES.map(() => new THREE.Color().setHSL(0.27 + Math.random() * 0.06, 0.3, 0.6 + Math.random() * 0.2));
+  const d2 = new Float32Array(N), idx = [...Array(N).keys()], NEAR = 42;
+  treeLOD = { last: new THREE.Vector3(1e9, 0, 0), update(p) {
+    if (p.distanceToSquared(this.last) < 4) return; this.last.copy(p);
+    for (let i = 0; i < N; i++) { const t = TREES[i]; d2[i] = (t[0] - p.x) ** 2 + (t[2] - p.z) ** 2; }
+    idx.sort((a, b) => d2[a] - d2[b]); let n = 0, f = 0;
+    for (const i of idx) { if (n < nearCap && d2[i] < NEAR * NEAR) { near.setMatrixAt(n, mats[i]); near.setColorAt(n, tint[i]); n++; } else { far.setMatrixAt(f, mats[i]); far.setColorAt(f, tint[i]); f++; } }
+    near.count = n; far.count = f; near.instanceMatrix.needsUpdate = far.instanceMatrix.needsUpdate = true; if (near.instanceColor) near.instanceColor.needsUpdate = true; if (far.instanceColor) far.instanceColor.needsUpdate = true;
+  } };
+  treeLOD.update(camera.position);
+  if (window.__game) window.__game.trees = { total: N, near, far, triNear: geo.index ? geo.index.count / 3 : 0 };
+});
+function mergeGeos(gs) { const pos = [], uv = [], nor = [], ind = []; let o = 0; for (const g of gs) { const a = g.attributes; pos.push(...a.position.array); uv.push(...a.uv.array); nor.push(...a.normal.array); ind.push(...g.index.array.map((v) => v + o)); o += a.position.count; } const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(ind); return g; }
 const loadGLB = (f) => new Promise((res, rej) => gl.load(import.meta.env.BASE_URL + 'models/' + f, res, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, rej));
 let SOLDIER, REF; const LOS = {}; const REST = new Map();
 const saveRest = (m, key) => { const r = {}; m.traverse(o => o.isBone && (r[o.name] = [o.quaternion.clone(), o.position.clone()])); REST.set(key, r); m.userData.restKey = key; };
