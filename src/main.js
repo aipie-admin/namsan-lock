@@ -30,7 +30,7 @@ const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
 // sky + environment
 const sun = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(89), THREE.MathUtils.degToRad(-120));
 function makeSky() { const s = new Sky(); s.scale.setScalar(4500); const u = s.material.uniforms; u.turbidity.value = 9; u.rayleigh.value = 2.6; u.mieCoefficient.value = 0.006; u.mieDirectionalG.value = 0.86; u.sunPosition.value.copy(sun); return s; }
-scene.add(makeSky());
+const skyMain = makeSky(); scene.add(skyMain);
 const pmrem = new THREE.PMREMGenerator(renderer);
 const envScene = new THREE.Scene(); envScene.add(makeSky());
 scene.environment = pmrem.fromScene(envScene, 0.02).texture; scene.environmentIntensity = 0.7;
@@ -48,6 +48,7 @@ function canvasTex(w, h, draw, repeat) { const c = document.createElement('canva
 const tileTex = canvasTex(512, 512, (g, w) => { g.fillStyle = '#9a8f88'; g.fillRect(0, 0, w, w); for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { const v = 130 + Math.random() * 40 | 0; g.fillStyle = `rgb(${v},${v - 8},${v - 14})`; g.fillRect(x * 64 + 2, y * 64 + 2, 60, 60); } }, [14, 14]);
 const winTex = canvasTex(128, 256, (g, w, h) => { g.fillStyle = '#0c0d16'; g.fillRect(0, 0, w, h); for (let y = 4; y < h; y += 10) for (let x = 4; x < w; x += 10) { if (Math.random() < 0.42) { const c = ['#ffd9a0', '#fff1c9', '#a8d4ff', '#ffbf7a'][Math.random() * 4 | 0]; g.fillStyle = c; g.fillRect(x, y, 6, 6); } } });
 
+let skylineMat, stringMats = [];
 // ---------- terrain ----------
 const PLAZA = 30;
 const hillY = (r) => r < PLAZA ? 0 : r < 112 ? -22 * THREE.MathUtils.smoothstep(r, PLAZA, 112) : r < 122 ? -22 : -22 - 40 * THREE.MathUtils.smoothstep(r, 122, 178);
@@ -84,7 +85,7 @@ function distToPath(x, z) { let best = 1e9; const p = new THREE.Vector2(x, z), a
 // skyline
 {
   const n = quality === 'high' ? 1400 : 700;
-  const mat = new THREE.MeshStandardMaterial({ color: '#2c2d3a', roughness: 0.6, metalness: 0.3, emissive: '#ffffff', emissiveMap: winTex, emissiveIntensity: 2.2 });
+  const mat = skylineMat = new THREE.MeshStandardMaterial({ color: '#2c2d3a', roughness: 0.6, metalness: 0.3, emissive: '#ffffff', emissiveMap: winTex, emissiveIntensity: 2.2 });
   const b = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), mat, n);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
   for (let i = 0; i < n; i++) { const r = 200 + Math.pow(Math.random(), 0.7) * 850, a = Math.random() * Math.PI * 2; const h = 12 + Math.pow(Math.random(), 3) * 110 * (r < 500 ? 1 : 0.7); const w = 10 + Math.random() * 18; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 3); m.compose(new THREE.Vector3(Math.cos(a) * r, -62, Math.sin(a) * r), q, new THREE.Vector3(w, h, w * (0.6 + Math.random() * 0.8))); b.setMatrixAt(i, m); }
@@ -133,7 +134,7 @@ const pathLights = [];
   for (const z of ZONES.filter(z => z.stairs)) { for (let t = z.from; t < z.to; t += 0.35 / PATH_LEN) { const { pos, dir } = pathAt(t); const y = hillY(Math.max(0, pos.length() - 1.8)); const g = new THREE.BoxGeometry(3.5, 0.24, 0.36); g.rotateY(Math.atan2(dir.x, dir.y)); g.translate(pos.x, y + 0.0, pos.y); steps.push(g.toNonIndexed()); } }
   const sm = new THREE.Mesh(mergeGeometries(steps), stepMat); sm.receiveShadow = true; sm.castShadow = true; scene.add(sm);
   // shopping street: string lights over the path
-  const sz = ZONES.find(z => z.shops); const bulbG = new THREE.SphereGeometry(0.07, 8, 6); const cols = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }));
+  const sz = ZONES.find(z => z.shops); const bulbG = new THREE.SphereGeometry(0.07, 8, 6); const cols = stringMats = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }); m.userData.base = new THREE.Color(c); return m; });
   for (let t = sz.from; t < sz.to; t += 1.2 / PATH_LEN) { const { pos, n } = pathAt(t); const y = hillY(pos.length()) + 3.3 + Math.sin(t * 900) * 0.15; for (const s of [-1, 0, 1]) { const b = new THREE.Mesh(bulbG, cols[(Math.round(t * 1000) + s + 1) % 4]); b.position.set(pos.x + n.x * s * 1.2, y - Math.abs(s) * 0.2, pos.y + n.y * s * 1.2); scene.add(b); } }
 }
 
@@ -311,7 +312,7 @@ async function showServers() {
     b.onclick = () => enter(s); list.appendChild(b);
   }
 }
-async function enter(s) { serverId = s.id; $('srvName').textContent = s.emoji + ' ' + s.name; $('msg').placeholder = s.placeholder + ' (최대 60자)'; buildDecor(s.id); $('servers').classList.add('hidden'); $('hud').classList.remove('hidden'); inGame = true; curZone = null; await loadLocks(); }
+async function enter(s) { serverId = s.id; $('srvName').textContent = s.emoji + ' ' + s.name; $('msg').placeholder = s.placeholder + ' (최대 60자)'; buildDecor(s.id); $('servers').classList.add('hidden'); $('hud').classList.remove('hidden'); inGame = true; curZone = null; dayK = 0; await loadLocks(); }
 $('exitBtn').onclick = showServers;
 setInterval(() => inGame && loadLocks(), 15000);
 
@@ -368,6 +369,7 @@ function nearestFreeSlot() {
   return bd < 2.4 ? best : null;
 }
 function nearestLock() { let best = null, bd = 2.0; for (const L of locks) { const d = slotInfo(L.slot).pos.distanceTo(tmp.copy(player.position).setY(1)); if (d < bd) { bd = d; best = L; } } return best; }
+let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
 function walkable(x, z) { const r = Math.hypot(x, z); if (r > 7.6 && r < FR * Math.cos(Math.PI / SEG) - 0.45) return true; const da = Math.abs(Math.atan2(Math.sin(Math.atan2(z, x) - GATE_ANGLE), Math.cos(Math.atan2(z, x) - GATE_ANGLE))); if (r < 31 && r > 20 && da * r < GATE_HALF - 0.35) return true; if (r > 29 && distToPath(x, z) < 1.75) return true; const c = PATH[0].clone().setLength(117); return Math.hypot(x - c.x, z - c.y) < 10.5; }
 function setAction(name) { if (!actions[name] || current === actions[name]) return; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
 function tick() {
@@ -400,7 +402,19 @@ function tick() {
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
   camera.position.y = Math.max(camera.position.y, hillY(Math.hypot(camera.position.x, camera.position.z)) + 0.4); camera.lookAt(inGame ? target : new THREE.Vector3(0, 25, 0));
   sunLight.target.position.copy(player.position); sunLight.position.copy(player.position).add(new THREE.Vector3(sun.x, 0.35, sun.z).normalize().multiplyScalar(80));
-  towerLights.forEach((r, i) => r.material.color.setHSL((t * 0.05 + i * 0.25) % 1, 0.8, 0.6).multiplyScalar(4));
+  // ---- time of day tied to route progress (0 = parking lot sunset, 1 = fence night) ----
+  { const P = player.position; const target = !inGame ? 0.55 : Math.hypot(P.x, P.z) < 29 ? 1 : pathT(P.x, P.z); dayK += (target - dayK) * Math.min(1, dt * 1.5); }
+  const k = dayK, L = THREE.MathUtils.lerp, ss = THREE.MathUtils.smoothstep;
+  sun.setFromSphericalCoords(1, THREE.MathUtils.degToRad(L(85.5, 97, k)), THREE.MathUtils.degToRad(-120));
+  const su = skyMain.material.uniforms; su.sunPosition.value.copy(sun); su.rayleigh.value = L(2.6, 0.6, k); su.turbidity.value = L(9, 2, k);
+  sunLight.intensity = L(3.2, 0.35, ss(k, 0, 0.8)); sunLight.color.lerpColors(C_SUN, C_MOON, ss(k, 0.2, 0.9));
+  hemi.intensity = L(1.1, 0.4, k); hemi.color.lerpColors(C_HEMI, C_HEMI_N, k);
+  scene.fog.color.lerpColors(FOG, FOG_N, ss(k, 0, 0.9)); scene.environmentIntensity = L(0.7, 0.18, k);
+  renderer.toneMappingExposure = L(0.85, 1.0, k); bloom.strength = L(0.35, 0.85, k);
+  const glow = L(1, 3, ss(k, 0.1, 1));
+  skylineMat.emissiveIntensity = 1.2 * glow; lampMat.color.copy(C_LAMP).multiplyScalar(2.2 * glow); stringMats.forEach(m => m.color.copy(m.userData.base).multiplyScalar(1.2 * glow));
+  pointLights.concat(pathLights).forEach(pl => pl.intensity = (pl.userData.base ??= pl.intensity) * L(0.5, 1.6, k));
+  towerLights.forEach((r, i) => r.material.color.setHSL((t * 0.05 + i * 0.25) % 1, 0.8, 0.6).multiplyScalar(2.5 * glow));
   myMarker.rotation.y = t * 2;
   quality === 'high' ? composer.render() : renderer.render(scene, camera);
   requestAnimationFrame(tick);
