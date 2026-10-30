@@ -282,7 +282,7 @@ function rebuildLocks() {
   const my = mine[serverId] && locks.find(l => l.id === mine[serverId]);
   myMarker.visible = !!my; if (my) myMarker.position.copy(slotInfo(my.slot).pos).setY(slotInfo(my.slot).pos.y + 0.22);
   $('lockCount').textContent = `🔒 ${locks.length}개`;
-  $('status').textContent = mine[serverId] ? '💗 이 서버에 이미 자물쇠를 걸었어요 (분홍 표시)' : '펜스 가까이 가서 E를 눌러 자물쇠를 걸어보세요';
+  $('status').textContent = mine[serverId] ? '💗 이 서버에 이미 자물쇠를 걸었어요 (분홍 표시)' : (heldType ? '펜스 가까이 가서 E를 눌러 자물쇠를 걸어보세요' : '산책로를 따라 올라가 펜스 입구의 자물쇠 상인을 찾아가세요');
 }
 async function loadLocks() { const { data, error } = await SB.from('namsan_locks').select(COLS).eq('server_id', serverId).order('id').limit(2000); if (!error) { locks = data; rebuildLocks(); } }
 async function loadMine() { const { data } = await SB.rpc('namsan_mine', { p_device: device }); mine = {}; (data || []).forEach(r => mine[r.server_id] = r.id); }
