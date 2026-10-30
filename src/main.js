@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -8,7 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createClient } from '@supabase/supabase-js';
 import { clone as skClone } from 'three/addons/utils/SkeletonUtils.js';
-import { MERCHANTS, GATE_ANGLE, ZONES } from './merchants.js';
+import { MERCHANTS, LAYOUT, ZONES } from './merchants.js';
 
 const SB = createClient('https://qcugwkkgmvpbaglgento.supabase.co', 'sb_publishable_dKwXKOiKrqsE4C4D5cUgpQ_4ig3YFqC', { auth: { persistSession: false } });
 const COLS = ['id', 'server_id', 'lock_type', 'message', 'nickname', 'slot', 'created_at'].join(',');
@@ -49,36 +50,49 @@ const tileTex = canvasTex(512, 512, (g, w) => { g.fillStyle = '#9a8f88'; g.fillR
 const winTex = canvasTex(128, 256, (g, w, h) => { g.fillStyle = '#0c0d16'; g.fillRect(0, 0, w, h); for (let y = 4; y < h; y += 10) for (let x = 4; x < w; x += 10) { if (Math.random() < 0.42) { const c = ['#ffd9a0', '#fff1c9', '#a8d4ff', '#ffbf7a'][Math.random() * 4 | 0]; g.fillStyle = c; g.fillRect(x, y, 6, 6); } } });
 
 let skylineMat, stringMats = [];
-// ---------- terrain ----------
-const PLAZA = 30;
-const hillY = (r) => r < PLAZA ? 0 : r < 112 ? -22 * THREE.MathUtils.smoothstep(r, PLAZA, 112) : r < 122 ? -22 : -22 - 40 * THREE.MathUtils.smoothstep(r, 122, 178);
-// winding uphill path: parking lot (bottom) -> plaza gate
-const PATH = [];
-for (let k = 0; k <= 80; k++) { const u = k / 80; const th = GATE_ANGLE + 1.5 * (1 - u) + Math.sin(u * 9) * 0.06 * (1 - u); const r = 31 + 77 * Math.pow(1 - u, 1.15) + Math.sin(u * 14) * 2.5 * (1 - u); PATH.push(new THREE.Vector2(Math.cos(th) * r, Math.sin(th) * r)); }
-PATH.push(new THREE.Vector2(Math.cos(GATE_ANGLE) * 26, Math.sin(GATE_ANGLE) * 26));
-let PATH_LEN = 0; const CUM = [0]; for (let i = 1; i < PATH.length; i++) { PATH_LEN += PATH[i].distanceTo(PATH[i - 1]); CUM.push(PATH_LEN); }
-function pathAt(t) { const L = t * PATH_LEN; let i = 1; while (i < PATH.length - 1 && CUM[i] < L) i++; const a = PATH[i - 1], b = PATH[i]; const f = (L - CUM[i - 1]) / (CUM[i] - CUM[i - 1] || 1); const dir = b.clone().sub(a).normalize(); return { pos: a.clone().lerp(b, THREE.MathUtils.clamp(f, 0, 1)), dir, n: new THREE.Vector2(-dir.y, dir.x) }; }
-function pathT(x, z) { let best = 1e9, bt = 0; const p = new THREE.Vector2(x, z); for (let i = 1; i < PATH.length; i++) { const a = PATH[i - 1], ab = PATH[i].clone().sub(a); const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1); const d = a.clone().addScaledVector(ab, t).distanceTo(p); if (d < best) { best = d; bt = (CUM[i - 1] + t * ab.length()) / PATH_LEN; } } return bt; }
-console.info('path length m', PATH_LEN.toFixed(1), '≈', (PATH_LEN / 2.2).toFixed(0), 's walk');
-function distToPath(x, z) { let best = 1e9; const p = new THREE.Vector2(x, z), ab = new THREE.Vector2(), ap = new THREE.Vector2(); for (let i = 1; i < PATH.length; i++) { const a = PATH[i - 1]; ab.subVectors(PATH[i], a); ap.subVectors(p, a); const t = THREE.MathUtils.clamp(ap.dot(ab) / ab.lengthSq(), 0, 1); best = Math.min(best, ap.sub(ab.multiplyScalar(t)).length()); } return best; }
+// ---------- layout (straight route, see merchants.js LAYOUT) ----------
+const { park: PK, stairs1: S1, plaza: PZ, stairs2: S2, ring: RG } = LAYOUT;
+const FR = RG.r, FH = RG.fenceH, GATE_HALF = 2.0;
+const lerp = THREE.MathUtils.lerp, clamp = THREE.MathUtils.clamp;
+const hillY = (r) => r < FR + 1 ? 0 : -16 - 46 * THREE.MathUtils.smoothstep(r, FR + 1, 230);
+const N1 = 40, N2 = 48; // step counts
+function stairY(S, n, z) { const t = clamp((S.z1 - z) / (S.z1 - S.z0), 0, 1); return S.y1 + Math.min(n, Math.ceil(t * n - 1e-6)) * (S.y0 - S.y1) / n; }
+function groundY(x, z) {
+  if (Math.hypot(x, z) < FR + 0.6) return 0;
+  if (z >= S1.z1) return PK.y;
+  if (z >= S1.z0) return stairY(S1, N1, z);
+  if (z >= PZ.z0) return PZ.y;
+  return stairY(S2, N2, z);
+}
+const routeT = (x, z) => Math.hypot(x, z) < FR + 0.6 ? 1 : clamp((LAYOUT.spawnZ - z) / (LAYOUT.spawnZ - FR), 0, 1);
+function walkable(x, z) {
+  const r = Math.hypot(x, z);
+  if (r < FR - 0.55) return r > 7.6;
+  if (z > 0 && Math.abs(x) < GATE_HALF - 0.35 && r < FR + 1.2) return true; // gate
+  if (z > PK.z0 - 0.6 && z < PK.z1 - 0.6 && Math.abs(x) < PK.x - 0.6) return true;
+  if (z > PZ.z0 + 0.4 && z < PZ.z1 - 0.4 && Math.abs(x) < PZ.x - 0.6) return true;
+  if (z >= S1.z0 && z <= S1.z1 && Math.abs(x) < S1.w / 2 - 0.35) return true;
+  if (z >= S2.z0 - 1 && z <= S2.z1 && Math.abs(x) < S2.w / 2 - 0.35) return true;
+  return false;
+}
+function uvScale(g, sx, sy) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * sx, uv.getY(i) * (sy ?? sx)); return g; }
+const rep = (t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+const groundMeshes = [];
 {
-  const pts = []; for (let r = 0; r <= 180; r += 2) pts.push(new THREE.Vector2(r, hillY(r)));
+  const pts = []; for (let r = 0; r <= 240; r += 3) pts.push(new THREE.Vector2(r, hillY(r) - 3));
   const hill = new THREE.Mesh(new THREE.LatheGeometry(pts.reverse(), 96), new THREE.MeshStandardMaterial({ color: '#2f4a2c', roughness: 0.95 }));
   hill.material.side = THREE.DoubleSide; hill.receiveShadow = true; scene.add(hill);
-  const plaza = new THREE.Mesh(new THREE.CircleGeometry(PLAZA, 96), new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.7, metalness: 0.05 }));
-  plaza.rotation.x = -Math.PI / 2; plaza.position.y = 0.02; plaza.receiveShadow = true; scene.add(plaza);
   const city = new THREE.Mesh(new THREE.CircleGeometry(2500, 64), new THREE.MeshStandardMaterial({ color: '#1a1820', roughness: 1 }));
   city.rotation.x = -Math.PI / 2; city.position.y = -62; scene.add(city);
   const river = new THREE.Mesh(new THREE.PlaneGeometry(3000, 90), new THREE.MeshStandardMaterial({ color: '#2a3550', roughness: 0.08, metalness: 1 }));
   river.rotation.x = -Math.PI / 2; river.position.set(0, -61.8, 420); river.rotation.z = 0.25; scene.add(river);
 }
-
-// trees on slope
+// trees on the slope, away from the built route
 {
   const n = quality === 'high' ? 900 : 450;
   const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 5, 7), new THREE.MeshStandardMaterial({ color: '#2d5a32', roughness: 0.9 }), n);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
-  for (let i = 0; i < n; i++) { let r, a; do { r = 33 + Math.random() * 140; a = Math.random() * Math.PI * 2; } while (distToPath(Math.cos(a) * r, Math.sin(a) * r) < 4.5 || (r > 104 && r < 124 && Math.abs(Math.atan2(Math.sin(a - PATH[0].angle()), Math.cos(a - PATH[0].angle()))) < 0.25)); const k = 0.6 + Math.random() * 0.9; const col = new THREE.Color().setHSL(0.28 + Math.random() * 0.08, 0.45, 0.18 + Math.random() * 0.12); s.set(k, k * (0.8 + Math.random() * 0.6), k); m.compose(new THREE.Vector3(Math.cos(a) * r, hillY(r) + 2.3 * s.y, Math.sin(a) * r), q, s); cone.setMatrixAt(i, m); cone.setColorAt(i, col); }
+  for (let i = 0; i < n; i++) { let r, a, x, z; do { r = 30 + Math.random() * 190; a = Math.random() * Math.PI * 2; x = Math.cos(a) * r; z = Math.sin(a) * r; } while (Math.abs(x) < 27 && z > 18 && z < 186); const k = 0.7 + Math.random() * 1.1; const col = new THREE.Color().setHSL(0.28 + Math.random() * 0.08, 0.45, 0.18 + Math.random() * 0.12); s.set(k, k * (0.8 + Math.random() * 0.6), k); m.compose(new THREE.Vector3(x, hillY(r) - 1 + 2.3 * s.y, z), q, s); cone.setMatrixAt(i, m); cone.setColorAt(i, col); }
   cone.castShadow = true; cone.receiveShadow = true; scene.add(cone);
 }
 
@@ -96,46 +110,54 @@ function distToPath(x, z) { let best = 1e9; const p = new THREE.Vector2(x, z), a
 }
 
 const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd7a0').multiplyScalar(6) });
-// ---------- path, lamps, railings, parking lot ----------
+// ---------- built route: parking lot, straight stairs, shop plaza, circular plaza ----------
 const pathLights = [];
 {
-  const W = 1.7, pos = [], idx = [], uv = []; let acc = 0;
-  for (let i = 0; i < PATH.length; i++) { const p = PATH[i], q = PATH[Math.min(i + 1, PATH.length - 1)], o = PATH[Math.max(i - 1, 0)]; const d = new THREE.Vector2().subVectors(q, o).normalize(); const n = new THREE.Vector2(-d.y, d.x); if (i) acc += p.distanceTo(PATH[i - 1]);
-    for (const sgn of [-1, 1]) { const x = p.x + n.x * W * sgn, z = p.y + n.y * W * sgn; pos.push(x, hillY(Math.hypot(x, z)) + 0.06, z); uv.push(sgn < 0 ? 0 : 1, acc / 3.4); }
-    if (i) { const b = (i - 1) * 2; idx.push(b, b + 2, b + 1, b + 1, b + 2, b + 3); } }
-  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-  const stone = canvasTex(256, 256, (c, w) => { c.fillStyle = '#7a6d60'; c.fillRect(0, 0, w, w); for (let y = 0; y < 4; y++) for (let x = 0; x < 2; x++) { const v = 110 + Math.random() * 40 | 0; c.fillStyle = `rgb(${v},${v - 10},${v - 22})`; c.fillRect(x * 128 + (y % 2) * 64 - 64 + 3, y * 64 + 3, 122, 58); c.fillRect(x * 128 + (y % 2) * 64 + 64 + 3, y * 64 + 3, 122, 58); } }); stone.wrapS = stone.wrapT = THREE.RepeatWrapping;
-  const road = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: stone, roughness: 0.85, side: THREE.DoubleSide })); road.receiveShadow = true; scene.add(road);
-  const iron = new THREE.MeshStandardMaterial({ color: '#2b2b30', metalness: 0.85, roughness: 0.4 });
-  const rails = [], poles = []; const bulbGeo = new THREE.SphereGeometry(0.22, 12, 8); let lastPost = null, dAcc = 0, lampAcc = 0, side = 1;
-  for (let i = 1; i < PATH.length - 3; i++) { const shopZ = ZONES.find(z => z.shops); const fr = CUM[i] / PATH_LEN; if (fr > shopZ.from && fr < shopZ.to) { lastPost = null; continue; } const p = PATH[i], d = new THREE.Vector2().subVectors(PATH[i + 1], PATH[i - 1]).normalize(), n = new THREE.Vector2(-d.y, d.x);
-    const outward = n.dot(p) > 0 ? n : n.clone().negate(); const rx = p.x + outward.x * 2.05, rz = p.y + outward.y * 2.05, ry = hillY(Math.hypot(rx, rz));
-    poles.push(new THREE.CylinderGeometry(0.04, 0.04, 1.0, 6).translate(rx, ry + 0.5, rz));
-    const cur = new THREE.Vector3(rx, ry + 0.95, rz); if (lastPost) { const len = cur.distanceTo(lastPost); const r = new THREE.CylinderGeometry(0.035, 0.035, len, 6); r.translate(0, len / 2, 0); r.applyMatrix4(new THREE.Matrix4().lookAt(new THREE.Vector3(), cur.clone().sub(lastPost), new THREE.Vector3(0, 1, 0)).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2))); r.translate(lastPost.x, lastPost.y, lastPost.z); rails.push(r); } lastPost = cur;
-    lampAcc += p.distanceTo(PATH[i - 1]); if (lampAcc > 11) { lampAcc = 0; side *= -1; const lx = p.x + n.x * 2.4 * side, lz = p.y + n.y * 2.4 * side, ly = hillY(Math.hypot(lx, lz));
-      poles.push(new THREE.CylinderGeometry(0.06, 0.09, 3.6, 8).translate(lx, ly + 1.8, lz)); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(lx, ly + 3.7, lz); scene.add(b);
-      if (pathLights.length < 6 && i % 2) { const pl = new THREE.PointLight('#ffc98a', 10, 12, 2); pl.position.copy(b.position); scene.add(pl); pathLights.push(pl); } } }
-  const rm = new THREE.Mesh(mergeGeometries([...poles, ...rails].map(x => x.toNonIndexed())), iron); rm.castShadow = true; scene.add(rm);
-  // parking lot + bus stop at the bottom
-  const P0 = PATH[0], ang = P0.angle(); const c = new THREE.Vector2(Math.cos(ang) * 117, Math.sin(ang) * 117);
-  const lot = new THREE.Mesh(new THREE.CircleGeometry(11, 40), new THREE.MeshStandardMaterial({ color: '#2d2d33', roughness: 0.9 })); lot.rotation.x = -Math.PI / 2; lot.position.set(c.x, -21.95, c.y); lot.receiveShadow = true; scene.add(lot);
-  const carCols = ['#c0392b', '#ecf0f1', '#2c3e50', '#f1c40f', '#7f8c8d'];
-  for (let i = 0; i < 5; i++) { const a = ang + Math.PI / 2 + (i - 2) * 0.33; const x = c.x + Math.cos(a) * 7, z = c.y + Math.sin(a) * 7; const car = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 4), new THREE.MeshStandardMaterial({ color: carCols[i], metalness: 0.7, roughness: 0.25 })); body.position.y = 0.55; const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.1), new THREE.MeshStandardMaterial({ color: '#1b2430', metalness: 0.9, roughness: 0.1 })); top.position.set(0, 1.15, -0.2); car.add(body, top); car.traverse(o => o.castShadow = true); car.position.set(x, -22, z); car.rotation.y = -a; scene.add(car); }
+  const wallMat = new THREE.MeshStandardMaterial({ map: rep(canvasTex(256, 256, (c, w) => { c.fillStyle = '#6f675f'; c.fillRect(0, 0, w, w); for (let y = 0; y < 8; y++) for (let x = 0; x < 4; x++) { const v = 90 + Math.random() * 40 | 0; c.fillStyle = `rgb(${v},${v - 6},${v - 14})`; c.fillRect(x * 64 + (y % 2) * 32 - 32 + 2, y * 32 + 2, 60, 28); c.fillRect(x * 64 + (y % 2) * 32 + 32 + 2, y * 32 + 2, 60, 28); } })), roughness: 0.9 });
+  const asphalt = new THREE.MeshStandardMaterial({ roughness: 0.85, map: canvasTex(1024, 1024, (c, w) => { c.fillStyle = '#2b2b31'; c.fillRect(0, 0, w, w); for (let i = 0; i < 9000; i++) { const v = 30 + Math.random() * 30 | 0; c.fillStyle = `rgb(${v},${v},${v + 4})`; c.fillRect(Math.random() * w, Math.random() * w, 2, 2); } c.strokeStyle = '#e8e8e0'; c.lineWidth = 5; const sx = w / 44, sz = w / 40; for (const zr of [[2, 8], [24, 30]]) for (let x = -20; x <= 20; x += 2.6) { if (Math.abs(x) < 5) continue; c.beginPath(); c.moveTo((x + 22) * sx, zr[0] * sz); c.lineTo((x + 22) * sx, zr[1] * sz); c.stroke(); } c.setLineDash([30, 30]); c.strokeStyle = '#f0c040'; c.beginPath(); c.moveTo(w / 2, 0); c.lineTo(w / 2, w); c.stroke(); }) });
+  const tile = new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.7, metalness: 0.05 });
+  const slab = (w, top, z0, z1, topMat, us) => { const h = top + 72; const g = new THREE.BoxGeometry(w, h, z1 - z0); const mats = [wallMat, wallMat, topMat, wallMat, wallMat, wallMat]; if (us) uvScale(g, us); const me = new THREE.Mesh(g, mats); me.position.set(0, top - h / 2, (z0 + z1) / 2); me.receiveShadow = true; scene.add(me); groundMeshes.push(me); return me; };
+  slab(PK.x * 2, PK.y, PK.z0, PK.z1, asphalt);
+  // the asphalt texture shouldn't repeat on the walls -> walls get repeat via separate uv scale
+  slab(PZ.x * 2, PZ.y, PZ.z0, PZ.z1, tile);
+  wallMat.map.repeat.set(10, 10);
+  tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping; tileTex.repeat.set(6, 6);
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(FR + 0.6, FR + 0.6, 72, 96), [wallMat, tile, wallMat]); disc.position.y = -36; disc.receiveShadow = true; scene.add(disc); groundMeshes.push(disc);
+  // straight stairs (each step is a tall box down to the hillside)
+  const stepMat = new THREE.MeshStandardMaterial({ color: '#a49688', roughness: 0.8 });
+  const steps = [], rails = [], iron = new THREE.MeshStandardMaterial({ color: '#2b2b30', metalness: 0.85, roughness: 0.4 });
+  const bulbGeo = new THREE.SphereGeometry(0.22, 12, 8);
+  for (const [S, n] of [[S1, N1], [S2, N2]]) {
+    const d = (S.z1 - S.z0) / n, rise = (S.y0 - S.y1) / n;
+    for (let i = 0; i < n; i++) { const top = S.y1 + (i + 1) * rise, h = top + 72; steps.push(new THREE.BoxGeometry(S.w, h, d + 0.02).translate(0, top - h / 2, S.z1 - (i + 0.5) * d).toNonIndexed()); }
+    const len = Math.hypot(S.z1 - S.z0, S.y0 - S.y1), ang = Math.atan2(S.y0 - S.y1, S.z1 - S.z0);
+    for (const sx of [-1, 1]) {
+      const wall = new THREE.BoxGeometry(0.35, 1.8, len); wall.rotateX(ang); wall.translate(sx * (S.w / 2 + 0.17), (S.y0 + S.y1) / 2 + 0.55, (S.z0 + S.z1) / 2); steps.push(wall.toNonIndexed());
+      const rail = new THREE.CylinderGeometry(0.04, 0.04, len, 6); rail.rotateX(Math.PI / 2 + ang); rail.translate(sx * (S.w / 2 + 0.17), (S.y0 + S.y1) / 2 + 1.55, (S.z0 + S.z1) / 2); rails.push(rail.toNonIndexed());
+      for (let z = S.z0 + 3; z < S.z1; z += 7.5) { const y = stairY(S, n, z); rails.push(new THREE.CylinderGeometry(0.06, 0.09, 3.6, 8).translate(sx * (S.w / 2 + 0.17), y + 1.8 + 0.4, z).toNonIndexed()); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(sx * (S.w / 2 + 0.17), y + 4.3, z); scene.add(b); if (pathLights.length < 6 && sx > 0 && Math.round(z) % 2) { const pl = new THREE.PointLight('#ffc98a', 12, 14, 2); pl.position.copy(b.position); scene.add(pl); pathLights.push(pl); } }
+    }
+  }
+  const sm = new THREE.Mesh(mergeGeometries(steps.map(g => { g.clearGroups(); return g; })), stepMat); sm.receiveShadow = sm.castShadow = true; scene.add(sm); groundMeshes.push(sm);
+  // plaza + parking lot lamps
+  for (const [x, z, y] of [[-20, 64, PZ.y], [20, 64, PZ.y], [-20, 108, PZ.y], [20, 108, PZ.y], [-6, 79, PZ.y], [6, 93, PZ.y], [-20, 142, PK.y], [20, 142, PK.y], [-20, 178, PK.y], [20, 178, PK.y], [5, 160, PK.y]]) { rails.push(new THREE.CylinderGeometry(0.07, 0.1, 4.2, 8).translate(x, y + 2.1, z).toNonIndexed()); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(x, y + 4.3, z); scene.add(b); }
+  // perimeter railings for the two wide areas
+  for (const [A, y] of [[PZ, PZ.y], [PK, PK.y]]) for (const sx of [-1, 1]) { const len = A.z1 - A.z0; const r = new THREE.CylinderGeometry(0.04, 0.04, len, 6); r.rotateX(Math.PI / 2); r.translate(sx * (A.x - 0.1), y + 1.0, (A.z0 + A.z1) / 2); rails.push(r.toNonIndexed()); for (let z = A.z0; z <= A.z1; z += 2) rails.push(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 6).translate(sx * (A.x - 0.1), y + 0.5, z).toNonIndexed()); }
+  for (const [A, y, zEdge] of [[PZ, PZ.y, PZ.z0], [PZ, PZ.y, PZ.z1], [PK, PK.y, PK.z0], [PK, PK.y, PK.z1]]) for (const sx of [-1, 1]) { const len = A.x - S1.w / 2 - 0.4; const r = new THREE.CylinderGeometry(0.04, 0.04, len, 6); r.rotateZ(Math.PI / 2); r.translate(sx * (S1.w / 2 + 0.4 + len / 2), y + 1.0, zEdge + (zEdge === A.z0 ? 0.1 : -0.1)); rails.push(r.toNonIndexed()); }
+  const rm = new THREE.Mesh(mergeGeometries(rails.map(g => { g.clearGroups(); return g; })), iron); rm.castShadow = true; scene.add(rm);
+  // string lights over the shop plaza
+  const bulbG = new THREE.SphereGeometry(0.07, 8, 6); stringMats = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }); m.userData.base = new THREE.Color(c); return m; });
+  const bulbs = stringMats.map(() => []);
+  for (let z = 66; z <= 106; z += 5) for (let x = -11; x <= 11; x += 0.9) { const y = PZ.y + 4.6 - (1 - (x / 11) ** 2) * 0.8; bulbs[Math.abs(Math.round(x * 10 + z)) % 4].push(new THREE.Vector3(x, y, z)); }
+  bulbs.forEach((list, i) => { const im = new THREE.InstancedMesh(bulbG, stringMats[i], list.length); list.forEach((p, j) => im.setMatrixAt(j, new THREE.Matrix4().makeTranslation(p.x, p.y, p.z))); scene.add(im); });
+  for (let z = 66; z <= 106; z += 5) for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 6), iron); p.position.set(sx * 11.2, PZ.y + 2.4, z); scene.add(p); }
+  // parked cars
+  const carCols = ['#c0392b', '#ecf0f1', '#2c3e50', '#f1c40f', '#7f8c8d', '#16a085', '#8e44ad'];
+  let ci = 0; for (const zc of [145, 167]) for (let x = -18.7; x <= 18.7; x += 2.6) { if (Math.abs(x) < 5 || Math.random() < 0.3) continue; const car = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 4), new THREE.MeshStandardMaterial({ color: carCols[ci++ % carCols.length], metalness: 0.7, roughness: 0.25 })); body.position.y = 0.55; const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.1), new THREE.MeshStandardMaterial({ color: '#1b2430', metalness: 0.9, roughness: 0.1 })); top.position.set(0, 1.15, -0.2); car.add(body, top); car.traverse(o => o.castShadow = true); car.position.set(x, PK.y, zc + 3); scene.add(car); }
+  // bus stop
   const bus = new THREE.Group(); const roof = new THREE.Mesh(new THREE.BoxGeometry(4, 0.12, 1.6), iron); roof.position.y = 2.5; const back = new THREE.Mesh(new THREE.BoxGeometry(4, 2.2, 0.06), new THREE.MeshStandardMaterial({ color: '#9fc6e0', metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.45 })); back.position.set(0, 1.3, -0.75); const bench = new THREE.Mesh(new THREE.BoxGeometry(3, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: '#8a5a3a' })); bench.position.set(0, 0.5, -0.4);
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: canvasTex(256, 128, (g2, w, h) => { g2.fillStyle = '#0f6a3a'; g2.fillRect(0, 0, w, h); g2.fillStyle = '#fff'; g2.font = 'bold 30px sans-serif'; g2.textAlign = 'center'; g2.fillText('남산공원 주차장', w / 2, 52); g2.font = '22px sans-serif'; g2.fillText('🚌 01A · N서울타워 ↑', w / 2, 96); }) }));
   sign.position.set(0, 2.1, -0.71); bus.add(roof, back, bench, sign); bus.traverse(o => o.castShadow = true);
-  const ba = ang - 0.09; bus.position.set(Math.cos(ba) * 112, -22, Math.sin(ba) * 112); bus.lookAt(0, -22, 0); scene.add(bus);
-}
-
-// ---------- stairs steps & shopping street ----------
-{
-  const stepMat = new THREE.MeshStandardMaterial({ color: '#9b8f84', roughness: 0.8 });
-  const steps = [];
-  for (const z of ZONES.filter(z => z.stairs)) { for (let t = z.from; t < z.to; t += 0.35 / PATH_LEN) { const { pos, dir } = pathAt(t); const y = hillY(Math.max(0, pos.length() - 1.8)); const g = new THREE.BoxGeometry(3.5, 0.24, 0.36); g.rotateY(Math.atan2(dir.x, dir.y)); g.translate(pos.x, y + 0.0, pos.y); steps.push(g.toNonIndexed()); } }
-  const sm = new THREE.Mesh(mergeGeometries(steps), stepMat); sm.receiveShadow = true; sm.castShadow = true; scene.add(sm);
-  // shopping street: string lights over the path
-  const sz = ZONES.find(z => z.shops); const bulbG = new THREE.SphereGeometry(0.07, 8, 6); const cols = stringMats = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }); m.userData.base = new THREE.Color(c); return m; });
-  for (let t = sz.from; t < sz.to; t += 1.2 / PATH_LEN) { const { pos, n } = pathAt(t); const y = hillY(pos.length()) + 3.3 + Math.sin(t * 900) * 0.15; for (const s of [-1, 0, 1]) { const b = new THREE.Mesh(bulbG, cols[(Math.round(t * 1000) + s + 1) % 4]); b.position.set(pos.x + n.x * s * 1.2, y - Math.abs(s) * 0.2, pos.y + n.y * s * 1.2); scene.add(b); } }
+  bus.position.set(9, PK.y, 176); bus.rotation.y = Math.PI; scene.add(bus);
 }
 
 // ---------- N Seoul Tower ----------
@@ -161,8 +183,7 @@ const towerLights = [];
   }
   scene.add(g);
 }
-
-// lamps + benches
+// lamps inside the circular plaza
 const pointLights = [];
 for (let i = 0; i < 8; i++) {
   const a = i / 8 * Math.PI * 2 + 0.2, r = 15;
@@ -172,32 +193,32 @@ for (let i = 0; i < 8; i++) {
   if (i % 2 === 0) { const pl = new THREE.PointLight('#ffc98a', 18, 16, 2); pl.position.copy(bulb.position); scene.add(pl); pointLights.push(pl); }
 }
 
-// ---------- fence ----------
-const FR = 28, SEG = 8, NCOL = 40, ROWS = [0.62, 0.88, 1.14];
-const verts = [...Array(SEG)].map((_, i) => { const a = i / SEG * Math.PI * 2 + Math.PI / SEG; return new THREE.Vector3(Math.cos(a) * FR, 0, Math.sin(a) * FR); });
-const SLOTS = SEG * ROWS.length * NCOL;
-const GATE_SEG = Math.round(GATE_ANGLE / (Math.PI * 2 / SEG)) - 1; const GATE_HALF = 1.8;
-const SEG_LEN = verts[0].distanceTo(verts[1]);
-const isGate = (seg, t) => seg === GATE_SEG && Math.abs(t - 0.5) * SEG_LEN < GATE_HALF + 0.2;
+// ---------- the tall ring fence ----------
+// slot = row * NCOL + col  (row 0 = 0.6 m … row 26 = 11.0 m). 27*360 = 9720 slots (< DB check 10000)
+const ROWS = [...Array(27)].map((_, i) => 0.6 + i * 0.4);
+const NCOL = 360, SLOTS = ROWS.length * NCOL, REACH_ROW = 2;
+const GATE_A = Math.PI / 2, GATE_HALF_A = GATE_HALF / FR;
+const colAngle = (c) => (c + 0.5) / NCOL * Math.PI * 2;
+const angDiff = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+const isGateCol = (c) => angDiff(colAngle(c), GATE_A) < GATE_HALF_A + 0.015;
 function slotInfo(slot) {
-  const seg = Math.floor(slot / (ROWS.length * NCOL)), rem = slot % (ROWS.length * NCOL), row = Math.floor(rem / NCOL), col = rem % NCOL;
-  const a = verts[seg], b = verts[(seg + 1) % SEG]; const t = (col + 0.5) / NCOL;
-  const p = a.clone().lerp(b, t); const inward = p.clone().setY(0).normalize().negate();
-  p.addScaledVector(inward, 0.05); p.y = ROWS[row] - 0.1;
-  return { pos: p, yaw: Math.atan2(inward.x, inward.z), seg, row, col };
+  const row = Math.floor(slot / NCOL), col = slot % NCOL, a = colAngle(col), rr = FR - 0.05;
+  return { pos: new THREE.Vector3(Math.cos(a) * rr, (ROWS[row] ?? 1) - 0.1, Math.sin(a) * rr), yaw: Math.atan2(-Math.cos(a), -Math.sin(a)), row, col };
 }
+let fenceGlow;
 {
   const metal = new THREE.MeshStandardMaterial({ color: '#3a3a40', metalness: 0.9, roughness: 0.35 });
-  const posts = [], wires = [];
-  for (let i = 0; i < SEG; i++) {
-    const a = verts[i], b = verts[(i + 1) % SEG], len = a.distanceTo(b), dir = b.clone().sub(a).normalize(), yaw = Math.atan2(dir.x, dir.z);
-    for (let k = 0; k <= 10; k++) { if (isGate(i, k / 10)) continue; const p = a.clone().lerp(b, k / 10); posts.push(new THREE.CylinderGeometry(0.06, 0.06, 1.35, 8).translate(p.x, 0.675, p.z)); }
-    const spans = i === GATE_SEG ? [[0, 0.5 - GATE_HALF / len], [0.5 + GATE_HALF / len, 1]] : [[0, 1]];
-    if (i === GATE_SEG) for (const t0 of [0.5 - GATE_HALF / len, 0.5 + GATE_HALF / len]) { const p = a.clone().lerp(b, t0); posts.push(new THREE.CylinderGeometry(0.12, 0.12, 2.6, 12).translate(p.x, 1.3, p.z)); }
-    for (const [t0, t1] of spans) for (const h of [...ROWS, 1.32]) { const sl = len * (t1 - t0); const w = new THREE.CylinderGeometry(h === 1.32 ? 0.05 : 0.012, h === 1.32 ? 0.05 : 0.012, sl, 6); w.rotateX(Math.PI / 2); w.rotateY(yaw); const m = a.clone().lerp(b, (t0 + t1) / 2); w.translate(m.x, h, m.z); wires.push(w); }
-  }
-  const fence = new THREE.Mesh(mergeGeometries([...posts, ...wires].map(g => g.toNonIndexed())), metal);
-  fence.castShadow = true; fence.receiveShadow = true; scene.add(fence);
+  const parts = []; const arc = Math.PI * 2 - GATE_HALF_A * 2, start = GATE_A + GATE_HALF_A;
+  const ring = (h, tube, seg = 256) => { const g = new THREE.TorusGeometry(FR, tube, 5, seg, arc); g.rotateX(Math.PI / 2); g.rotateY(-start); g.translate(0, h, 0); return g.toNonIndexed(); };
+  for (const h of ROWS) parts.push(ring(h, 0.012));
+  for (const h of [0.15, 4.2, 8.2, FH]) parts.push(ring(h, 0.06));
+  for (let i = 0; i < 90; i++) { const a = i / 90 * Math.PI * 2; if (angDiff(a, GATE_A) < GATE_HALF_A + 0.02) continue; parts.push(new THREE.CylinderGeometry(0.06, 0.07, FH, 8).translate(Math.cos(a) * FR, FH / 2, Math.sin(a) * FR).toNonIndexed()); }
+  for (const s of [-1, 1]) { const a = GATE_A + s * GATE_HALF_A; parts.push(new THREE.CylinderGeometry(0.2, 0.24, FH + 1, 16).translate(Math.cos(a) * FR, (FH + 1) / 2, Math.sin(a) * FR).toNonIndexed()); }
+  const fence = new THREE.Mesh(mergeGeometries(parts.map(g => { g.clearGroups(); return g; })), metal); fence.castShadow = true; fence.receiveShadow = true; scene.add(fence);
+  // LED crown + gate sign
+  fenceGlow = new THREE.Mesh(new THREE.TorusGeometry(FR, 0.05, 6, 256, arc).rotateX(Math.PI / 2).rotateY(-start).translate(0, FH + 0.12, 0), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff7eb6').multiplyScalar(3) })); scene.add(fenceGlow);
+  const gs = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.0), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, map: canvasTex(512, 116, (c, w, h) => { c.fillStyle = '#2a1030'; c.fillRect(0, 0, w, h); c.fillStyle = '#ffd1e0'; c.font = 'bold 56px sans-serif'; c.textAlign = 'center'; c.fillText('💗 사랑의 자물쇠', w / 2, 78); }) }));
+  gs.position.set(0, FH - 0.4, FR + 0.05); scene.add(gs);
 }
 
 // ---------- lock models ----------
@@ -226,29 +247,30 @@ function lockGeometry(shape) {
 const geoCache = {}; const getGeo = (s) => geoCache[s] ||= lockGeometry(s);
 const lockMat = (c) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.92, roughness: 0.22, envMapIntensity: 1.4 });
 const realMeshes = {}, decorMeshes = {};
-const DECOR_PER = 170;
+const REAL_CAP = 3000; const DECOR_PER = quality === 'high' ? 650 : 350;
 for (const [k, t] of Object.entries(TYPES)) {
-  const real = new THREE.InstancedMesh(getGeo(t.shape), lockMat(t.color), SLOTS); real.count = 0; real.userData.type = k; real.castShadow = true; real.frustumCulled = false; scene.add(real); realMeshes[k] = real;
+  const real = new THREE.InstancedMesh(getGeo(t.shape), lockMat(t.color), REAL_CAP); real.count = 0; real.userData.type = k; real.castShadow = true; real.frustumCulled = false; scene.add(real); realMeshes[k] = real;
   const dm = new THREE.InstancedMesh(getGeo(t.shape), lockMat(t.color), DECOR_PER); dm.castShadow = true; scene.add(dm); decorMeshes[k] = dm;
 }
-// decorative "older" locks all over the fence (seeded per server)
+// decorative "older" locks all over the tall fence (seeded per server), denser near the bottom
 function seeded(seed) { return () => (seed = (seed * 16807) % 2147483647) / 2147483647; }
 function buildDecor(serverId) {
   const rnd = seeded(serverId * 9973 + 7); const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
   for (const k of Object.keys(TYPES)) { const dm = decorMeshes[k];
-    for (let i = 0; i < DECOR_PER; i++) { const seg = rnd() * SEG | 0, t = rnd(), row = rnd() * (ROWS.length) | 0; if (isGate(seg, t)) { dm.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); continue; }
-      const a = verts[seg], b = verts[(seg + 1) % SEG]; const p = a.clone().lerp(b, t); const inward = p.clone().normalize().negate();
-      p.addScaledVector(inward, -0.02 + rnd() * 0.03); p.y = ROWS[row] - 0.1 - rnd() * 0.02;
-      e.set((rnd() - 0.5) * 0.5, Math.atan2(inward.x, inward.z) + (rnd() - 0.5) * 0.8, (rnd() - 0.5) * 0.6); q.setFromEuler(e);
+    for (let i = 0; i < DECOR_PER; i++) { const col = rnd() * NCOL | 0, row = Math.min(ROWS.length - 1, Math.pow(rnd(), 1.5) * ROWS.length | 0); if (isGateCol(col)) { dm.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); rnd(); rnd(); rnd(); rnd(); rnd(); continue; }
+      const a = colAngle(col) + (rnd() - 0.5) * (Math.PI * 2 / NCOL) * 0.8, rr = FR - 0.04 + rnd() * 0.03;
+      const p = new THREE.Vector3(Math.cos(a) * rr, ROWS[row] - 0.1 - rnd() * 0.02, Math.sin(a) * rr);
+      e.set((rnd() - 0.5) * 0.5, Math.atan2(-Math.cos(a), -Math.sin(a)) + (rnd() - 0.5) * 0.8, (rnd() - 0.5) * 0.6); q.setFromEuler(e);
       const s = 0.8 + rnd() * 0.4; m.compose(p, q, new THREE.Vector3(s, s, s)); dm.setMatrixAt(i, m); }
-    dm.instanceMatrix.needsUpdate = true; }
+    dm.instanceMatrix.needsUpdate = true; dm.computeBoundingSphere(); }
 }
 
 // ---------- merchants (data-driven, see merchants.js) ----------
 const merchantObjs = MERCHANTS.map(cfg => {
   const g = new THREE.Group();
-  if (cfg.pathT != null) { const { pos: pp, n } = pathAt(cfg.pathT); const x = pp.x + n.x * cfg.side * 3.6, z = pp.y + n.y * cfg.side * 3.6; g.position.set(x, hillY(Math.hypot(x, z)), z); g.lookAt(pp.x, g.position.y, pp.y); }
-  else { g.position.set(Math.cos(cfg.angle) * cfg.radius, 0, Math.sin(cfg.angle) * cfg.radius); g.lookAt(0, 0, 0); g.rotateY(Math.PI); }
+  if (cfg.x != null) { const y = groundY(cfg.x, cfg.z); g.position.set(cfg.x, y, cfg.z); const f = cfg.face || [0, cfg.z]; g.lookAt(f[0], y, f[1]); }
+  else { g.position.set(Math.cos(cfg.angle) * cfg.radius, 0, Math.sin(cfg.angle) * cfg.radius); g.lookAt(0, 0, 0); }
+
   const wood = new THREE.MeshStandardMaterial({ color: '#7a4b2a', roughness: 0.7 });
   const table = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.9, 0.9), wood); table.position.set(0, 0.45, 0.9);
   const awn = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.8, 16, 1, true, 0, Math.PI), new THREE.MeshStandardMaterial({ color: cfg.awning, roughness: 0.6, side: THREE.DoubleSide }));
@@ -265,7 +287,7 @@ const merchantObjs = MERCHANTS.map(cfg => {
 let heldType = null, curZone = null;
 
 // ---------- character ----------
-const player = new THREE.Group(); scene.add(player); const SPAWN = PATH[0]; player.position.set(SPAWN.x, hillY(SPAWN.length()), SPAWN.y);
+const player = new THREE.Group(); scene.add(player); player.position.set(0, PK.y, LAYOUT.spawnZ);
 let mixer, actions = {}, current;
 const myMarker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff7eb6').multiplyScalar(6) })); myMarker.visible = false; scene.add(myMarker);
 
@@ -297,7 +319,7 @@ function rebuildLocks() {
   const my = mine[serverId] && locks.find(l => l.id === mine[serverId]);
   myMarker.visible = !!my; if (my) myMarker.position.copy(slotInfo(my.slot).pos).setY(slotInfo(my.slot).pos.y + 0.22);
   $('lockCount').textContent = `🔒 ${locks.length}개`;
-  $('status').textContent = mine[serverId] ? '💗 이 서버에 이미 자물쇠를 걸었어요 (분홍 표시)' : (heldType ? '펜스 가까이 가서 E를 눌러 자물쇠를 걸어보세요' : '계단과 상점가를 지나 올라가며 자물쇠 상인을 찾아가세요');
+  $('status').textContent = mine[serverId] ? '💗 이 서버에 이미 자물쇠를 걸었어요 (분홍 표시)' : (heldType ? '펜스 가까이 가서 E를 눌러 자물쇠를 걸어보세요' : '계단 위 상점 광장에서 자물쇠 상인을 찾아가세요 · 클릭=걷기, 더블클릭=달리기');
 }
 async function loadLocks() { const { data, error } = await SB.from('namsan_locks').select(COLS).eq('server_id', serverId).order('id').limit(2000); if (!error) { locks = data; rebuildLocks(); } }
 async function loadMine() { const { data } = await SB.rpc('namsan_mine', { p_device: device }); mine = {}; (data || []).forEach(r => mine[r.server_id] = r.id); }
@@ -323,12 +345,15 @@ function openShop(m) { shopMerchant = m; $('shopName').textContent = '🔒 ' + m
 $('shopClose').onclick = () => $('shop').classList.add('hidden');
 $('buyBtn').onclick = () => { heldType = selType; $('shop').classList.add('hidden'); flash(`${TYPES[heldType].name} 자물쇠를 받았어요! 펜스에 가서 걸어보세요.`); };
 const ERR = { PROFANITY: '욕설이나 비속어가 포함되어 있어 걸 수 없어요.', ALREADY_HUNG: '이 서버에는 이미 자물쇠를 걸었어요. (1인 1개)', SLOT_TAKEN: '그 자리는 방금 다른 사람이 걸었어요. 옆자리로 가보세요.' };
-function openModal() { if (mine[serverId]) return flash('이 서버에는 이미 자물쇠를 걸었어요. 수정·삭제는 할 수 없어요.'); if (pendingSlot == null) return; if (!heldType) return flash('먼저 상점가나 펜스 입구의 자물쇠 상인에게 자물쇠를 받으세요.'); selType = heldType; $('heldLock').textContent = '들고 있는 자물쇠: ' + TYPES[heldType].name; $('err').textContent = ''; $('modal').classList.remove('hidden'); $('msg').focus(); }
+function openModal() { if (mine[serverId]) return flash('이 서버에는 이미 자물쇠를 걸었어요. 수정·삭제는 할 수 없어요.'); if (pendingSlot == null) return; if (!heldType) return flash('먼저 상점가나 펜스 입구의 자물쇠 상인에게 자물쇠를 받으세요.'); selType = heldType; $('heldLock').textContent = '들고 있는 자물쇠: ' + TYPES[heldType].name; $('err').textContent = ''; $('hgt').max = ROWS.length - 1; $('hgt').value = REACH_ROW; updH(); $('modal').classList.remove('hidden'); $('msg').focus(); }
+function updH() { const v = +$('hgt').value; $('hgtLbl').textContent = `${ROWS[v].toFixed(1)}m` + (v > 3 ? ' 🪜 사다리로 높이 걸기' : ' (눈높이)'); }
+$('hgt').oninput = updH;
 $('cancelBtn').onclick = () => $('modal').classList.add('hidden');
 $('hangBtn').onclick = async () => {
   const msg = $('msg').value.trim(); if (!msg) { $('err').textContent = '메시지를 입력해주세요.'; return; }
+  const slot = nearestFreeSlot(+$('hgt').value); if (slot == null) { $('err').textContent = '이 근처 그 높이에는 빈자리가 없어요. 옆으로 조금 이동해보세요.'; return; }
   $('hangBtn').disabled = true; $('err').textContent = '';
-  const { data, error } = await SB.rpc('namsan_hang', { p_device: device, p_server: serverId, p_type: selType, p_message: msg, p_nickname: $('nick').value.trim(), p_slot: pendingSlot });
+  const { data, error } = await SB.rpc('namsan_hang', { p_device: device, p_server: serverId, p_type: selType, p_message: msg, p_nickname: $('nick').value.trim(), p_slot: slot });
   $('hangBtn').disabled = false;
   if (error) { const key = Object.keys(ERR).find(k => error.message.includes(k)); $('err').textContent = ERR[key] || ('오류: ' + error.message); if (key === 'SLOT_TAKEN' || key === 'ALREADY_HUNG') { await loadMine(); loadLocks(); } return; }
   mine[serverId] = data; $('modal').classList.add('hidden'); $('msg').value = ''; await loadLocks(); flash('💗 자물쇠를 걸었어요! 영원히 남아요.');
@@ -342,11 +367,13 @@ $('viewClose').onclick = () => $('view').classList.add('hidden');
 const keys = {}; const modalOpen = () => !$('shop').classList.contains('hidden') || !$('modal').classList.contains('hidden') || !$('view').classList.contains('hidden');
 addEventListener('keydown', e => { if (modalOpen() || !inGame) return; keys[e.code] = true; if (e.code === 'KeyE') interact(); });
 addEventListener('keyup', e => keys[e.code] = false);
-const SDIR = PATH[4].clone().sub(PATH[0]); let yaw = Math.atan2(-SDIR.x, -SDIR.y), pitch = 0.25, dist = 5.5; const drag = new Map();
+let yaw = 0, pitch = 0.25, dist = 5.5; const drag = new Map(); let moveTo = null;
 const cv = $('c'); const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2();
 cv.addEventListener('pointerdown', e => { drag.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY }); cv.setPointerCapture(e.pointerId); });
-cv.addEventListener('pointermove', e => { const d = drag.get(e.pointerId); if (!d) return hover(e); yaw -= (e.clientX - d.x) * 0.005; pitch = THREE.MathUtils.clamp(pitch + (e.clientY - d.y) * 0.004, -0.2, 1.2); d.x = e.clientX; d.y = e.clientY; });
-cv.addEventListener('pointerup', e => { const d = drag.get(e.pointerId); drag.delete(e.pointerId); if (d && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6 && inGame) { const L = pick(e); if (L) showLock(L); } });
+cv.addEventListener('pointermove', e => { const d = drag.get(e.pointerId); if (!d) return hover(e); yaw -= (e.clientX - d.x) * 0.005; pitch = THREE.MathUtils.clamp(pitch + (e.clientY - d.y) * 0.004, -0.75, 1.2); d.x = e.clientX; d.y = e.clientY; });
+cv.addEventListener('pointerup', e => { const d = drag.get(e.pointerId); drag.delete(e.pointerId); if (d && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6 && inGame && !modalOpen()) { const L = pick(e); if (L) return showLock(L); const g = pickGround(e); if (g) moveTo = { x: g.x, z: g.z, run: performance.now() - lastClick < 350 }; lastClick = performance.now(); } });
+let lastClick = 0; const clickMark = new THREE.Mesh(new THREE.RingGeometry(0.25, 0.36, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff9ec8').multiplyScalar(2), transparent: true, opacity: 0.85, depthWrite: false })); clickMark.visible = false; scene.add(clickMark);
+function pickGround(e) { ndc.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(ndc, camera); const hit = ray.intersectObjects(groundMeshes, false).find(h => h.face && h.face.normal.y > 0.5 || h.object.isMesh && h.point.y > -60); if (!hit) return null; const { x, z } = hit.point; return walkable(x, z) ? { x, z } : null; }
 cv.addEventListener('wheel', e => { dist = THREE.MathUtils.clamp(dist + e.deltaY * 0.004, 2.2, 14); }, { passive: true });
 function pick(e) { ndc.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(ndc, camera); const hit = ray.intersectObjects(Object.values(realMeshes), false)[0]; return hit && hit.object.userData.ids[hit.instanceId]; }
 function hover(e) { if (!inGame) return; const L = pick(e); cv.style.cursor = L ? 'pointer' : ''; }
@@ -361,32 +388,57 @@ $('actBtn').onclick = interact;
 
 // ---------- loop ----------
 const clock = new THREE.Clock(); const tmp = new THREE.Vector3(); let facing = 0;
-function nearestFreeSlot() {
-  const p = player.position; const r = Math.hypot(p.x, p.z); if (r < FR - 2.2) return null;
+function nearestFreeSlot(prefRow = REACH_ROW) {
+  const p = player.position; const r = Math.hypot(p.x, p.z); if (r < FR - 2.4 || r > FR + 0.2) return null;
+  const a = Math.atan2(p.z, p.x); const c0 = Math.round(((a / (Math.PI * 2)) % 1 + 1) % 1 * NCOL - 0.5);
   let best = null, bd = 1e9;
-  for (let seg = 0; seg < SEG; seg++) { const a = verts[seg], b = verts[(seg + 1) % SEG]; const ab = b.clone().sub(a); const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1); const c0 = Math.round(t * NCOL - 0.5);
-    for (let dc = -3; dc <= 3; dc++) { const col = c0 + dc; if (col < 0 || col >= NCOL || isGate(seg, (col + 0.5) / NCOL)) continue; for (const row of [1, 2, 0]) { const s = seg * ROWS.length * NCOL + row * NCOL + col; if (bySlot.has(s)) continue; const d = slotInfo(s).pos.distanceTo(tmp.set(p.x, ROWS[row], p.z)) + Math.abs(row - 1) * 0.05; if (d < bd) { bd = d; best = s; } } } }
-  return bd < 2.4 ? best : null;
+  for (let dc = -6; dc <= 6; dc++) { const col = ((c0 + dc) % NCOL + NCOL) % NCOL; if (isGateCol(col)) continue;
+    for (let dr = -2; dr <= 2; dr++) { const row = prefRow + dr; if (row < 0 || row >= ROWS.length) continue; const s = row * NCOL + col; if (bySlot.has(s)) continue; const d = Math.abs(dc) + Math.abs(dr) * 3; if (d < bd) { bd = d; best = s; } } }
+  return best;
 }
 function nearestLock() { let best = null, bd = 2.0; for (const L of locks) { const d = slotInfo(L.slot).pos.distanceTo(tmp.copy(player.position).setY(1)); if (d < bd) { bd = d; best = L; } } return best; }
+let retarget = null;
+function bindRots(root) { const out = {}; root.updateMatrixWorld(true); const ri = new THREE.Quaternion(); root.matrixWorld.decompose(new THREE.Vector3(), ri, new THREE.Vector3()); ri.invert(); root.traverse(o => { if (o.isBone) { const q = new THREE.Quaternion(); o.matrixWorld.decompose(new THREE.Vector3(), q, new THREE.Vector3()); out[o.name] = q.premultiply(ri); } }); return out; }
+const FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI), FLIP_INV = FLIP.clone().invert(); // user model faces +Z, Soldier faces -Z
+function makeRetarget(src, tgt, ref) {
+  // Soldier's node rest pose isn't a T-pose but its skin bind pose is: snap it to bind pose (skeleton.pose()) and read rotations.
+  const tb = bindRots(tgt); ref.traverse(o => o.isSkinnedMesh && o.skeleton.pose()); const sb = bindRots(ref); const sBones = {}; src.traverse(o => o.isBone && (sBones[o.name] = o));
+  const list = []; tgt.traverse(o => { if (o.isBone && sBones[o.name] && sb[o.name] && tb[o.name]) list.push({ t: o, s: sBones[o.name], sInv: sb[o.name].clone().invert(), tr: tb[o.name] }); });
+  const qs = new THREE.Quaternion(), rootQ = new THREE.Quaternion(), pq = new THREE.Quaternion(), tmpV = new THREE.Vector3(), tmpS = new THREE.Vector3(), want = new THREE.Quaternion();
+  return () => {
+    src.updateMatrixWorld(true); src.matrixWorld.decompose(tmpV, rootQ, tmpS); rootQ.invert();
+    tgt.updateMatrixWorld(true); const tRootInv = new THREE.Quaternion(); tgt.matrixWorld.decompose(tmpV, tRootInv, tmpS); tRootInv.invert();
+    for (const e of list) { // parent-first order (traverse)
+      e.s.matrixWorld.decompose(tmpV, qs, tmpS); qs.premultiply(rootQ); want.copy(qs).multiply(e.sInv).premultiply(FLIP).multiply(FLIP_INV).multiply(e.tr); // delta from rest, mirrored into target's facing frame
+      e.t.parent.updateMatrixWorld(); e.t.parent.matrixWorld.decompose(tmpV, pq, tmpS); pq.premultiply(tRootInv);
+      e.t.quaternion.copy(pq.invert().multiply(want)); e.t.updateMatrixWorld(true);
+    }
+  };
+}
 let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
-function walkable(x, z) { const r = Math.hypot(x, z); if (r > 7.6 && r < FR * Math.cos(Math.PI / SEG) - 0.45) return true; const da = Math.abs(Math.atan2(Math.sin(Math.atan2(z, x) - GATE_ANGLE), Math.cos(Math.atan2(z, x) - GATE_ANGLE))); if (r < 31 && r > 20 && da * r < GATE_HALF - 0.35) return true; if (r > 29 && distToPath(x, z) < 1.75) return true; const c = PATH[0].clone().setLength(117); return Math.hypot(x - c.x, z - c.y) < 10.5; }
 function setAction(name) { if (!actions[name] || current === actions[name]) return; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
   if (inGame && !modalOpen()) {
     let ix = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + joy.x;
     let iz = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0) + joy.y;
-    const l = Math.hypot(ix, iz); const run = keys.ShiftLeft || keys.ShiftRight || Math.hypot(joy.x, joy.y) > 0.9;
-    if (l > 0.1) { ix /= Math.max(l, 1); iz /= Math.max(l, 1);
+    const l = Math.hypot(ix, iz); let run = keys.ShiftLeft || keys.ShiftRight || Math.hypot(joy.x, joy.y) > 0.9;
+    let dx = 0, dz = 0; const P = player.position;
+    if (l > 0.1) { moveTo = null; ix /= Math.max(l, 1); iz /= Math.max(l, 1);
       const sp = run ? 5.2 : 2.2; const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-      const dx = (fx * -iz + -fz * ix) * sp * dt, dz = (fz * -iz + fx * ix) * sp * dt; // right = forward × up
-      const P = player.position; facing = Math.atan2(dx, dz);
+      dx = (fx * -iz + -fz * ix) * sp * dt; dz = (fz * -iz + fx * ix) * sp * dt; // right = forward × up
+    } else if (moveTo) { // click-to-move (click = walk, double-click = run)
+      run = moveTo.run; const vx = moveTo.x - P.x, vz = moveTo.z - P.z, dd = Math.hypot(vx, vz);
+      if (dd < 0.2) moveTo = null; else { const st = Math.min(dd, (run ? 5.2 : 2.2) * dt); dx = vx / dd * st; dz = vz / dd * st; }
+    }
+    clickMark.visible = !!moveTo; if (moveTo) { clickMark.position.set(moveTo.x, groundY(moveTo.x, moveTo.z) + 0.05, moveTo.z); clickMark.scale.setScalar(1 + Math.sin(t * 6) * 0.15); }
+    if (dx || dz) { facing = Math.atan2(dx, dz); const ox = P.x, oz = P.z;
       if (walkable(P.x + dx, P.z + dz)) { P.x += dx; P.z += dz; } else if (walkable(P.x + dx, P.z)) P.x += dx; else if (walkable(P.x, P.z + dz)) P.z += dz;
-      if (merchantObjs.some(m => Math.hypot(P.x - m.pos.x, P.z - m.pos.z) < 1.1)) { P.x -= dx; P.z -= dz; }
+      if (merchantObjs.some(m => Math.hypot(P.x - m.pos.x, P.z - m.pos.z) < 1.1)) { P.x = ox; P.z = oz; }
+      if (moveTo && P.x === ox && P.z === oz) moveTo = null; // blocked
       setAction(run ? 'Run' : 'Walk'); } else setAction('Idle');
-    if (player.children[0]) { const cur = player.children[0].rotation.y; let d = facing + Math.PI - cur; d = Math.atan2(Math.sin(d), Math.cos(d)); player.children[0].rotation.y = cur + d * Math.min(1, dt * 10); }
-    { const P = player.position, r = Math.hypot(P.x, P.z); const zn = r < 29 ? '펜스' : (ZONES.find(z => { const t = pathT(P.x, P.z); return t >= z.from && t < z.to; }) || ZONES[0]).name; if (zn !== curZone) { curZone = zn; const zt = $('zone'); zt.textContent = zn; zt.classList.remove('show'); void zt.offsetWidth; zt.classList.add('show'); } }
+    if (player.children[0]) { const cur = player.children[0].rotation.y; let d = facing - cur; d = Math.atan2(Math.sin(d), Math.cos(d)); player.children[0].rotation.y = cur + d * Math.min(1, dt * 10); }
+    { const P = player.position, r = Math.hypot(P.x, P.z); const zn = ZONES.find(z => z.test(P.x, P.z)).name; if (zn !== curZone) { curZone = zn; const zt = $('zone'); zt.textContent = zn; zt.classList.remove('show'); void zt.offsetWidth; zt.classList.add('show'); } }
     pendingSlot = mine[serverId] ? null : nearestFreeSlot();
     const pr = $('prompt'); const nl = nearestLock();
     nearMerchant = merchantObjs.find(m => Math.hypot(player.position.x - m.pos.x, player.position.z - m.pos.z) < 2.8) || null;
@@ -396,14 +448,15 @@ function tick() {
     $('actBtn').classList.toggle('hidden', !nearMerchant && pendingSlot == null); $('actBtn').textContent = nearMerchant ? '💬' : '🔒';
     const tip = $('tip'); if (nl) { const sp = slotInfo(nl.slot).pos.clone().project(camera); tip.style.left = (sp.x + 1) / 2 * innerWidth + 'px'; tip.style.top = (1 - sp.y) / 2 * innerHeight + 'px'; tip.innerHTML = `“${esc(nl.message)}”<br><small>— ${esc(nl.nickname)}</small>`; tip.classList.remove('hidden'); } else tip.classList.add('hidden');
   } else { $('tip').classList.add('hidden'); if (!inGame) yaw += dt * 0.05; }
-  player.position.y = hillY(Math.hypot(player.position.x, player.position.z)); mixer?.update(dt); merchantObjs.forEach(m => m.mixer?.update(dt));
+  { const P = player.position, gy = groundY(P.x, P.z) + 0.02; P.y = Math.abs(gy - P.y) > 2 ? gy : P.y + (gy - P.y) * Math.min(1, dt * 14); }
+  mixer?.update(dt); retarget?.(); merchantObjs.forEach(m => m.mixer?.update(dt));
   const target = tmp.copy(player.position).add(new THREE.Vector3(0, 1.5, 0));
   const cd = inGame ? dist : 30; const cp = inGame ? pitch : 0.18;
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
-  camera.position.y = Math.max(camera.position.y, hillY(Math.hypot(camera.position.x, camera.position.z)) + 0.4); camera.lookAt(inGame ? target : new THREE.Vector3(0, 25, 0));
+  camera.position.y = Math.max(camera.position.y, (walkable(camera.position.x, camera.position.z) ? groundY(camera.position.x, camera.position.z) : -70) + 0.4); camera.lookAt(inGame ? target : new THREE.Vector3(0, 25, 0));
   sunLight.target.position.copy(player.position); sunLight.position.copy(player.position).add(new THREE.Vector3(sun.x, 0.35, sun.z).normalize().multiplyScalar(80));
   // ---- time of day tied to route progress (0 = parking lot sunset, 1 = fence night) ----
-  { const P = player.position; const target = !inGame ? 0.55 : Math.hypot(P.x, P.z) < 29 ? 1 : pathT(P.x, P.z); dayK += (target - dayK) * Math.min(1, dt * 1.5); }
+  { const P = player.position; const target = !inGame ? 0.55 : routeT(P.x, P.z); dayK += (target - dayK) * Math.min(1, dt * 1.5); }
   const k = dayK, L = THREE.MathUtils.lerp, ss = THREE.MathUtils.smoothstep;
   sun.setFromSphericalCoords(1, THREE.MathUtils.degToRad(L(85.5, 97, k)), THREE.MathUtils.degToRad(-120));
   const su = skyMain.material.uniforms; su.sunPosition.value.copy(sun); su.rayleigh.value = L(2.6, 0.6, k); su.turbidity.value = L(9, 2, k);
@@ -414,6 +467,7 @@ function tick() {
   const glow = L(1, 3, ss(k, 0.1, 1));
   skylineMat.emissiveIntensity = 1.2 * glow; lampMat.color.copy(C_LAMP).multiplyScalar(2.2 * glow); stringMats.forEach(m => m.color.copy(m.userData.base).multiplyScalar(1.2 * glow));
   pointLights.concat(pathLights).forEach(pl => pl.intensity = (pl.userData.base ??= pl.intensity) * L(0.5, 1.6, k));
+  fenceGlow.material.color.setHSL((t * 0.03) % 1, 0.7, 0.6).multiplyScalar(1.5 * glow);
   towerLights.forEach((r, i) => r.material.color.setHSL((t * 0.05 + i * 0.25) % 1, 0.8, 0.6).multiplyScalar(2.5 * glow));
   myMarker.rotation.y = t * 2;
   quality === 'high' ? composer.render() : renderer.render(scene, camera);
@@ -422,11 +476,19 @@ function tick() {
 
 // ---------- boot ----------
 applyQuality();
-new GLTFLoader().load(import.meta.env.BASE_URL + 'models/soldier.glb', (g) => {
-  const m = g.scene; m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); facing = Math.atan2(SDIR.x, SDIR.y); m.rotation.y = facing + Math.PI; player.add(m);
-  mixer = new THREE.AnimationMixer(m); for (const c of g.animations) actions[c.name] = mixer.clipAction(c); setAction('Idle');
-  for (const mo of merchantObjs) { const npc = skClone(m); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI; mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const idle = g.animations.find(c => c.name === 'Idle'); idle && mo.mixer.clipAction(idle).play(); }
+const gl = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const loadGLB = (f) => new Promise((res, rej) => gl.load(import.meta.env.BASE_URL + 'models/' + f, res, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, rej));
+Promise.all([loadGLB('character.glb'), loadGLB('soldier.glb')]).then(([c, g]) => {
+  const m = c.scene; m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+  facing = Math.PI; m.rotation.y = facing; player.add(m);
+  // user character has no animations -> drive it from a hidden Soldier rig (same mixamorig bone names),
+  // retargeted in world space using each rig's bind pose so differing rest orientations don't break it.
+  const src = skClone(g.scene); src.visible = false; scene.add(src);
+  mixer = new THREE.AnimationMixer(src); for (const clip of g.animations) actions[clip.name] = mixer.clipAction(clip);
+  const ref = skClone(g.scene); retarget = makeRetarget(src, m, ref);
+  setAction('Idle');
+  for (const mo of merchantObjs) { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI; mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const idle = g.animations.find(c => c.name === 'Idle'); idle && mo.mixer.clipAction(idle).play(); }
   $('loading').classList.add('hidden'); showServers();
-}, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, () => { $('loading').classList.add('hidden'); showServers(); });
+}).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
 tick();
-window.__game = { player, camera, setYaw: (v) => yaw = v, pathAt };
+window.__game = { player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, groundY, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
