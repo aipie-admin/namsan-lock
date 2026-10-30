@@ -71,8 +71,8 @@ function walkable(x, z) {
   if (z > 0 && Math.abs(x) < GATE_HALF - 0.35 && r < FR + 1.2) return true; // gate
   if (z > PK.z0 - 0.6 && z < PK.z1 - 0.6 && Math.abs(x) < PK.x - 0.6) return true;
   if (z > PZ.z0 + 0.4 && z < PZ.z1 - 0.4 && Math.abs(x) < PZ.x - 0.6) return true;
-  if (z >= S1.z0 && z <= S1.z1 && Math.abs(x) < S1.w / 2 - 0.35) return true;
-  if (z >= S2.z0 - 1 && z <= S2.z1 && Math.abs(x) < S2.w / 2 - 0.35) return true;
+  if (z >= S1.z0 - 1.5 && z <= S1.z1 + 1.5 && Math.abs(x) < S1.w / 2 - 0.35) return true; // overlaps plaza/parking edges
+  if (z >= S2.z0 - 1 && z <= S2.z1 + 1.5 && Math.abs(x) < S2.w / 2 - 0.35) return true;
   return false;
 }
 function uvScale(g, sx, sy) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * sx, uv.getY(i) * (sy ?? sx)); return g; }
@@ -491,4 +491,4 @@ Promise.all([loadGLB('character.glb'), loadGLB('soldier.glb')]).then(([c, g]) =>
   $('loading').classList.add('hidden'); showServers();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
 tick();
-window.__game = { player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, groundY, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
+window.__game = { player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
