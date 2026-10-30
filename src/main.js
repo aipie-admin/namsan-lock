@@ -105,7 +105,9 @@ function terrainY(x, z) {
     [PZ.x, PZ.z0, PZ.z1, () => PZ.y], [S2.w / 2 + 0.5, S2.z0, S2.z1, (zz) => groundY(0, zz)]];
   let h = 0 - 0.25 - 0.9 * Math.max(0, Math.hypot(x, z) - (FR + 0.6)), cap = Infinity;
   for (const [hw, z0, z1, top] of sh) { const dx = Math.max(0, Math.abs(x) - hw), cz = clampZ(z, z0, z1), dz = Math.abs(z - cz); h = Math.max(h, top(cz) - 0.25 - 0.45 * Math.hypot(dx, dz)); if (dx < 1.5 && dz < 1.5) cap = Math.min(cap, top(cz) - 0.35); }
-  h = Math.max(h, hillY(Math.hypot(x, z)) - 3) + Math.sin(x * 0.37) * Math.cos(z * 0.29) * 0.5; return Math.min(h, cap);
+  h = Math.max(h, hillY(Math.hypot(x, z)) - 3) + Math.sin(x * 0.37) * Math.cos(z * 0.29) * 0.5;
+  if (Math.hypot(x, z) < FR + 1.2) cap = Math.min(cap, -0.6); // never poke through the summit plaza floor
+  return Math.min(h, cap);
 }
 {
   const W = 150, D = 230, g = new THREE.PlaneGeometry(W, D, 120, 184).rotateX(-Math.PI / 2).translate(0, 0, 45); const pa = g.attributes.position;
@@ -618,7 +620,7 @@ gl.load(import.meta.env.BASE_URL + 'models/tree.glb', (g) => { g.scene.updateMat
   const near = new THREE.InstancedMesh(geo, mat, nearCap), far = new THREE.InstancedMesh(bg, bmat, N);
   near.castShadow = true; near.receiveShadow = true; near.frustumCulled = far.frustumCulled = false; scene.add(near, far);
   const mats = TREES.map(([x, y, z, h, r]) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), r), new THREE.Vector3(h * (0.85 + (r % 1) * 0.3), h, h * (0.85 + (r % 1) * 0.3))));
-  const tint = TREES.map(() => new THREE.Color().setHSL(0.27 + Math.random() * 0.06, 0.3, 0.6 + Math.random() * 0.2));
+  const tint = TREES.map(() => new THREE.Color().setHSL(0.3 + Math.random() * 0.06, 0.35, 0.5 + Math.random() * 0.15));
   const d2 = new Float32Array(N), idx = [...Array(N).keys()], NEAR = 42;
   treeLOD = { last: new THREE.Vector3(1e9, 0, 0), update(p) {
     if (p.distanceToSquared(this.last) < 4) return; this.last.copy(p);

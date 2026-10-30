@@ -31,3 +31,11 @@ slot = row*360 + col, row 0~26 = 높이 0.6~11.0m (0.4m 간격) → 9720칸 (DB 
 ## 멀티플레이 (Supabase Realtime)
 서버마다 채널 `namsan-srv-<id>`: presence(이름/성별), broadcast `p`(위치·방향·애니, 10Hz, 보간). 세션 id는 랜덤(기기 비밀 id는 전송 안 함).
 가까운 15명·35m 이내는 고해상도, 그 외 LOD, 200m 밖 숨김. 나가면 presence에서 빠져 제거.
+
+## Scene & assets (Oct 2026)
+- **Terrain**: solid mountain slopes rise to every route edge (no voids beside stairs/plazas); 260 rocks + 520 bushes (instanced). Terrain is capped below the summit plaza floor.
+- **Shop plaza**: square 32×32 m between the two stair flights; two merchants at the base of the upper stairs — 자물쇠 아저씨 (left, sells locks) and 돗가비 윷놀이 홍보직원 (right), desk only. Configure in `src/merchants.js` (`model`, `scale`, `rotY`, `sitY`, `sitZ`, `stall`, `props`).
+- **Merchant model** `public/models/merchant.glb`: user GLB with its chair, as-is (no posing). Lightly reduced 84,469 → 46,454 tris with UV seams locked; textures kept at original 2048 px (webp). 1.6 MB.
+- **Trees** `public/models/tree.glb`: user tree GLB, 10,656 → 6,097 tris, texture 512 webp, 156 KB. Instanced: the nearest ≤260 trees (≤120 on low quality) within 42 m render the mesh; all others are 4-tri crossed billboards whose texture is rendered from the GLB at load. Random rotation/scale/tint, rooted on terrain.
+- **Characters**: casual gait — the Soldier walk/run clip is blended toward a relaxed pose per bone group (less spine/shoulder twist, arms closer to the body, narrower stance); relaxed breathing idle. Applies to local and remote players.
+- **UI**: Pretendard Variable everywhere (CSS + canvas labels); softer bloom.
