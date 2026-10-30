@@ -15,8 +15,8 @@
 // 직선 동선 (z가 클수록 아래쪽). 주차장 → 직선 계단 → 상점 광장 → 직선 계단 → 원형 펜스 광장
 export const LAYOUT = {
   park: { x: 22, z0: 92, z1: 116, y: -22 },
-  stairs1: { w: 3.6, z0: 78, z1: 92, y0: -12, y1: -22 },
-  plaza: { x: 16, z0: 46, z1: 78, y: -12 },
+  stairs1: { w: 3.6, z0: 62, z1: 92, y0: -12, y1: -22 },
+  plaza: { x: 8, z0: 46, z1: 62, y: -12 },
   stairs2: { w: 3.6, z0: 24.6, z1: 46, y0: 0, y1: -12 },
   ring: { r: 24, fenceH: 12 },
   spawnZ: 98,
@@ -24,7 +24,7 @@ export const LAYOUT = {
 export const ZONES = [ // 지역 이름 토스트 (판정 순서대로)
   { name: '펜스', test: (x, z) => Math.hypot(x, z) < 24.6 },
   { name: '계단', test: (x, z) => z < 46 },
-  { name: '상점가', test: (x, z) => z < 78 },
+  { name: '상점가', test: (x, z) => z < 62 },
   { name: '계단', test: (x, z) => z < 92 },
   { name: '주차장', test: () => true },
 ];

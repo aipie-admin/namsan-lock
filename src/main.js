@@ -4,6 +4,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -140,7 +141,7 @@ function terrainY(x, z) {
 // skyline
 {
   const n = quality === 'high' ? 1400 : 700;
-  const mat = skylineMat = new THREE.MeshStandardMaterial({ color: '#2c2d3a', roughness: 0.6, metalness: 0.3, emissive: '#ffffff', emissiveMap: winTex, emissiveIntensity: 2.2 });
+  const mat = skylineMat = new THREE.MeshToonMaterial({ gradientMap: null, color: '#2c2d3a', emissive: '#ffffff', emissiveMap: winTex, emissiveIntensity: 2.2 });
   const b = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), mat, n);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
   for (let i = 0; i < n; i++) { const r = 200 + Math.pow(Math.random(), 0.7) * 850, a = Math.random() * Math.PI * 2; const h = 12 + Math.pow(Math.random(), 3) * 110 * (r < 500 ? 1 : 0.7); const w = 10 + Math.random() * 18; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 3); m.compose(new THREE.Vector3(Math.cos(a) * r, -62, Math.sin(a) * r), q, new THREE.Vector3(w, h, w * (0.6 + Math.random() * 0.8))); b.setMatrixAt(i, m); }
@@ -166,7 +167,8 @@ const pathLights = [];
 {
   const wallMat = new THREE.MeshStandardMaterial({ map: rep(canvasTex(256, 256, (c, w) => { c.fillStyle = '#6f675f'; c.fillRect(0, 0, w, w); for (let y = 0; y < 8; y++) for (let x = 0; x < 4; x++) { const v = 90 + Math.random() * 40 | 0; c.fillStyle = `rgb(${v},${v - 6},${v - 14})`; c.fillRect(x * 64 + (y % 2) * 32 - 32 + 2, y * 32 + 2, 60, 28); c.fillRect(x * 64 + (y % 2) * 32 + 32 + 2, y * 32 + 2, 60, 28); } })), roughness: 0.9 });
   const asphalt = new THREE.MeshStandardMaterial({ roughness: 0.85, map: canvasTex(1024, 1024, (c, w) => { c.fillStyle = '#2b2b31'; c.fillRect(0, 0, w, w); for (let i = 0; i < 9000; i++) { const v = 30 + Math.random() * 30 | 0; c.fillStyle = `rgb(${v},${v},${v + 4})`; c.fillRect(Math.random() * w, Math.random() * w, 2, 2); } c.strokeStyle = '#e8e8e0'; c.lineWidth = 5; const sx = w / 44, sz = w / 24; for (const zr of [[2, 8], [17, 23]]) for (let x = -20; x <= 20; x += 2.6) { if (Math.abs(x) < 5) continue; c.beginPath(); c.moveTo((x + 22) * sx, zr[0] * sz); c.lineTo((x + 22) * sx, zr[1] * sz); c.stroke(); } c.setLineDash([30, 30]); c.strokeStyle = '#f0c040'; c.beginPath(); c.moveTo(w / 2, 0); c.lineTo(w / 2, w); c.stroke(); }) });
-  const tile = new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.7, metalness: 0.05 });
+  const cobble = new THREE.TextureLoader().load(import.meta.env.BASE_URL + 'cobble.webp'); cobble.colorSpace = THREE.SRGBColorSpace; cobble.wrapS = cobble.wrapT = THREE.RepeatWrapping; cobble.anisotropy = 8; cobble.repeat.set(PZ.x * 2 / 2.4, (PZ.z1 - PZ.z0) / 1.35); // ~12cm cobbles
+  const tile = new THREE.MeshStandardMaterial({ map: cobble, roughness: 0.85 });
   const slab = (w, top, z0, z1, topMat, us) => { const h = top + 72; const g = new THREE.BoxGeometry(w, h, z1 - z0); const mats = [wallMat, wallMat, topMat, wallMat, wallMat, wallMat]; if (us) uvScale(g, us); const me = new THREE.Mesh(g, mats); me.position.set(0, top - h / 2, (z0 + z1) / 2); me.receiveShadow = true; scene.add(me); groundMeshes.push(me); return me; };
   slab(PK.x * 2, PK.y, PK.z0, PK.z1, asphalt);
   // the asphalt texture shouldn't repeat on the walls -> walls get repeat via separate uv scale
@@ -345,8 +347,32 @@ const myMarker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.Me
 // ---------- post processing / quality ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.2, 0.18, 1.05); composer.addPass(bloom);
-composer.addPass(new OutputPass());
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.0, 0.1, 2.0); bloom.enabled = false; // monochrome ink style: no bloom
+// ---- monochrome ink pass: 2 tones (white lit / light-gray shade) + black lines from depth+normal Sobel + faint texture lines
+const nrmRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }); nrmRT.depthTexture = new THREE.DepthTexture(1, 1); nrmRT.depthTexture.type = THREE.UnsignedIntType;
+const nrmMat = new THREE.MeshNormalMaterial();
+const inkPass = new ShaderPass({ uniforms: { tDiffuse: { value: null }, tNormal: { value: nrmRT.texture }, tDepth: { value: nrmRT.depthTexture }, res: { value: new THREE.Vector2(1, 1) }, near: { value: camera.near }, far: { value: camera.far }, thr: { value: 0.22 }, shade: { value: 0.8 }, lamps: { value: Array.from({ length: 32 }, () => new THREE.Vector3(0, -1e4, 0)) }, invProj: { value: new THREE.Matrix4() }, camW: { value: new THREE.Matrix4() } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }',
+  fragmentShader: `uniform sampler2D tDiffuse, tNormal, tDepth; uniform vec2 res; uniform float near, far, thr, shade; uniform vec3 lamps[32]; uniform mat4 invProj, camW; varying vec2 vUv;
+  float ld(vec2 uv){ float z = texture2D(tDepth, uv).x; return (near*far)/(far - z*(far-near)); }
+  float lum(vec2 uv){ return dot(texture2D(tDiffuse, uv).rgb, vec3(.299,.587,.114)); }
+  void main(){ vec2 px = 1.0/res; float d0 = ld(vUv); vec3 n0 = texture2D(tNormal, vUv).xyz;
+    float de = 0., ne = 0., le = 0.; float l0 = lum(vUv);
+    for (int i = 0; i < 4; i++) { vec2 o = (i==0? vec2(1,0): i==1? vec2(-1,0): i==2? vec2(0,1): vec2(0,-1)) * px * 1.2;
+      float d = ld(vUv+o); de = max(de, abs(d - d0) / max(d0, .001)); ne = max(ne, length(texture2D(tNormal, vUv+o).xyz - n0)); le = max(le, abs(lum(vUv+o) - l0)); }
+    float sky = step(0.9999, texture2D(tDepth, vUv).x);
+    float edge = max(smoothstep(.04, .09, de), smoothstep(.35, .6, ne)); edge *= (1. - sky) * (1. - smoothstep(60., 160., d0) * .6);
+    vec2 g = mat2(.7071,-.7071,.7071,.7071) * (vUv * res) / max(5., res.y / 160.); vec2 f = fract(g) - .5; float r = length(f);
+    float dotS = 1. - smoothstep(.36, .44, r), dotM = 1. - smoothstep(.2, .27, r);
+    float tone = l0 > thr * 1.9 ? 1.0 : (l0 > thr ? mix(1., shade, dotM) : mix(1., shade, max(dotS, .55))); if (sky > .5) tone = mix(.92, 1., smoothstep(0., .5, l0)); 
+    float tl = smoothstep(.06, .18, le) * .35 * (1. - smoothstep(20., 60., d0));
+    float c = tone * (1. - tl); vec3 rgb = texture2D(tDiffuse, vUv).rgb;
+    vec4 vp = invProj * vec4(vUv * 2. - 1., texture2D(tDepth, vUv).x * 2. - 1., 1.); vec3 wp = (camW * vec4(vp.xyz / vp.w, 1.)).xyz;
+    float warm = 0.; for (int i = 0; i < 32; i++) { float dl = distance(wp, lamps[i]); warm += 1. - smoothstep(0.8, 4.5, dl); } warm = clamp(warm, 0., 1.) * (1. - sky) * .6; vec3 col = mix(vec3(c), vec3(c) * vec3(1., .86, .45), warm);
+    float bulb = smoothstep(.85, .98, l0) * step(.12, rgb.r - rgb.b) * (1. - sky); col = mix(col, vec3(1., .85, .35), bulb);
+    col = mix(col, vec3(.06), edge * (1. - bulb));
+    gl_FragColor = vec4(col, 1.); }` });
+inkPass.uniforms.tNormal.value = nrmRT.texture; inkPass.uniforms.tDepth.value = nrmRT.depthTexture; composer.addPass(new OutputPass()); composer.addPass(inkPass);
 function applyQuality() {
   const hi = quality === 'high';
   renderer.setPixelRatio(Math.min(devicePixelRatio, hi ? 2 : 1));
@@ -356,7 +382,7 @@ function applyQuality() {
   scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   resize();
 }
-function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); composer.setSize(w, h); composer.setPixelRatio(renderer.getPixelRatio()); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); composer.setSize(w, h); { const pr = renderer.getPixelRatio(); nrmRT.setSize(w * pr, h * pr); inkPass.uniforms.res.value.set(w * pr, h * pr); } composer.setPixelRatio(renderer.getPixelRatio()); camera.aspect = w / h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize);
 $('qualityBtn').onclick = () => { quality = quality === 'high' ? 'low' : 'high'; localStorage.setItem('namsan_q', quality); applyQuality(); };
 
@@ -476,21 +502,32 @@ function makeRetarget(src, tgt, ref) {
   tgt.traverse(o => { if (!o.isBone) return; const sn = sBones[o.name] ? o.name : 'mixamorig' + (MAP[o.name] || o.name); if (sBones[sn] && sb[sn] && tb[o.name]) list.push({ t: o, s: sBones[sn], sInv: sb[sn].clone().invert(), tr: tb[o.name] }); });
   const qs = new THREE.Quaternion(), rootQ = new THREE.Quaternion(), pq = new THREE.Quaternion(), tmpV = new THREE.Vector3(), tmpS = new THREE.Vector3(), want = new THREE.Quaternion();
   // 차렷 (attention) pose: rest pose with legs + arms aimed straight down (computed once, local quats)
+  const sideL = new THREE.Vector3(), fwdL = new THREE.Vector3(); let legB = []; const va = new THREE.Vector3(), vb = new THREE.Vector3(), sW = new THREE.Vector3(), fW = new THREE.Vector3(), qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), qc = new THREE.Quaternion();
+  const rotW = (bo, dq) => { bo.getWorldQuaternion(qa); bo.parent.getWorldQuaternion(qb); bo.quaternion.copy(qb.invert().multiply(dq.multiply(qa))); bo.updateMatrixWorld(true); };
+  const straighten = () => { // anti duck-walk: no hip abduction, knees/feet point forward
+    tgt.getWorldQuaternion(qc); sW.copy(sideL).applyQuaternion(qc); fW.copy(fwdL).applyQuaternion(qc); tgt.updateMatrixWorld(true);
+    for (const l of legB) { const out = l.sd === 'Left' ? 1 : -1;
+      const d = l.leg.getWorldPosition(va).sub(l.up.getWorldPosition(vb)).normalize(), lat = d.dot(sW) * out; if (lat > 0.03) { const nd = d.clone().addScaledVector(sW, -(lat - 0.03) * out).normalize(); rotW(l.up, new THREE.Quaternion().setFromUnitVectors(d, nd)); }
+      const yawOf = () => { const h = l.toe.getWorldPosition(va).sub(l.foot.getWorldPosition(vb)).setY(0); return h.lengthSq() > 1e-8 ? Math.atan2(h.clone().cross(fW).y, h.dot(fW)) : 0; };
+      const Y = new THREE.Vector3(0, 1, 0); rotW(l.up, new THREE.Quaternion().setFromAxisAngle(Y, yawOf() * 0.6)); rotW(l.foot, new THREE.Quaternion().setFromAxisAngle(Y, yawOf())); } }; // knees + toes forward (fixes out-toed rest pose)
   const att = new Map(); { const save = []; tgt.traverse(o => o.isBone && save.push([o, o.quaternion.clone()]));
     const B = {}; tgt.traverse(o => o.isBone && (B[o.name.replace(/^mixamorig:?/, '')] = o)); const down = new THREE.Vector3(0, -1, 0), a = new THREE.Vector3(), b = new THREE.Vector3();
     tgt.updateMatrixWorld(true); const side = (B.LeftUpLeg && B.RightUpLeg) ? B.LeftUpLeg.getWorldPosition(new THREE.Vector3()).sub(B.RightUpLeg.getWorldPosition(new THREE.Vector3())).setY(0).normalize() : new THREE.Vector3(1, 0, 0);
     const fwd = new THREE.Vector3().crossVectors(side, new THREE.Vector3(0, 1, 0)).negate(); // character forward
     const D = (sd, out, fw) => new THREE.Vector3(0, -1, 0).addScaledVector(side, sd === 'Left' ? out : -out).addScaledVector(fwd, fw).normalize();
     const aim = (bn, cn, dir = down) => { const bo = B[bn], c = B[cn]; if (!bo || !c) return; tgt.updateMatrixWorld(true); const cur = c.getWorldPosition(a).sub(bo.getWorldPosition(b)).normalize(); const dq = new THREE.Quaternion().setFromUnitVectors(cur, dir); const bw = bo.getWorldQuaternion(new THREE.Quaternion()), pw = bo.parent.getWorldQuaternion(new THREE.Quaternion()); bo.quaternion.copy(pw.invert().multiply(dq.multiply(bw))); };
-    for (const sd of ['Left', 'Right']) { aim(sd + 'UpLeg', sd + 'Leg', D(sd, 0.05, 0)); aim(sd + 'Leg', sd + 'Foot', D(sd, 0.02, -0.02)); aim(sd + 'Arm', sd + 'ForeArm', D(sd, 0.16, 0.0)); aim(sd + 'ForeArm', sd + 'Hand', D(sd, 0.08, 0.2)); } // relaxed: arms slightly out, soft elbows, feet ~hip width
+    const wq = (o) => o.getWorldQuaternion(new THREE.Quaternion()); tgt.updateMatrixWorld(true); const flat = ['Left', 'Right'].flatMap(sd => [B[sd + 'Foot'], B[sd + 'ToeBase']]).filter(Boolean).map(o => [o, wq(o)]);
+    for (const sd of ['Left', 'Right']) { aim(sd + 'UpLeg', sd + 'Leg', D(sd, 0.07, 0.01)); aim(sd + 'Leg', sd + 'Foot', D(sd, 0.02, -0.02)); aim(sd + 'Arm', sd + 'ForeArm', D(sd, 0.3, 0.07)); aim(sd + 'ForeArm', sd + 'Hand', D(sd, 0.14, 0.42)); } // relaxed: arms slightly out, soft elbows, feet ~hip width
+    for (const [o, q] of flat) { tgt.updateMatrixWorld(true); o.quaternion.copy(wq(o.parent).invert().multiply(q)); } // feet flat (rest-pose foot orientation)
+    const tq = wq(tgt).invert(); sideL.copy(side).applyQuaternion(tq); fwdL.copy(fwd).applyQuaternion(tq); legB = ['Left', 'Right'].map(sd => ({ sd, up: B[sd + 'UpLeg'], leg: B[sd + 'Leg'], foot: B[sd + 'Foot'], toe: B[sd + 'ToeBase'] })).filter(l => l.up && l.leg && l.foot && l.toe);
     for (const e of list) att.set(e.t, e.t.quaternion.clone()); for (const [o, q] of save) o.quaternion.copy(q); tgt.updateMatrixWorld(true); }
   const chest = list.filter(e => /Spine0?2$|Spine1$|^Spine$/.test(e.t.name.replace(/^mixamorig:?/, ''))).map(e => e.t), bq = new THREE.Quaternion(), bx = new THREE.Vector3(1, 0, 0);
   const breathe = (a) => { if (!a) return; bq.setFromAxisAngle(bx, a); for (const b of chest) b.quaternion.multiply(bq); };
-  const CALM = [[/^(Hips|Spine0?\d?|Spine)$/, 0.55], [/^(Neck|neck|Head)$/, 0.4], [/Shoulder$/, 0.7], [/Arm$/, 0.5], [/ForeArm$/, 0.35], [/UpLeg$/, 0.18]];
+  const CALM = [[/^(Hips|Spine0?\d?|Spine)$/, 0.75], [/^(Neck|neck|Head)$/, 0.6], [/Shoulder$/, 0.85], [/Arm$/, 0.45], [/ForeArm$/, 0.45], [/UpLeg$/, 0.22]];
   const calm = []; for (const e of list) { const n = e.t.name.replace(/^mixamorig:?/, ''); for (const [re, k] of CALM) if (re.test(n)) { calm.push({ t: e.t, k }); break; } }
   return (w = 0) => {
     const br = Math.sin(performance.now() * 0.0021) * 0.012; // subtle breathing
-    if (w >= 0.999) { for (const e of list) e.t.quaternion.copy(att.get(e.t)); breathe(br); return; }
+    if (w >= 0.999) { for (const e of list) e.t.quaternion.copy(att.get(e.t)); breathe(br); straighten(); return; }
     src.updateMatrixWorld(true); src.matrixWorld.decompose(tmpV, rootQ, tmpS); rootQ.invert();
     tgt.updateMatrixWorld(true); const tRootInv = new THREE.Quaternion(); tgt.matrixWorld.decompose(tmpV, tRootInv, tmpS); tRootInv.invert();
     for (const e of list) { // parent-first order (traverse)
@@ -502,11 +539,34 @@ function makeRetarget(src, tgt, ref) {
     // (less spine/shoulder twist + chest-out, arms close to body with modest swing, narrower stance)
     for (const e of calm) e.t.quaternion.slerp(att.get(e.t), e.k);
     if (w > 0) { for (const e of list) e.t.quaternion.slerp(att.get(e.t), w); breathe(br * w); }
+    straighten();
   };
 }
-let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
+let dayK = 0; const C_SUN = new THREE.Color('#f4f4f4'), C_MOON = new THREE.Color('#c8ccd4'), C_HEMI = new THREE.Color('#d8d8d8'), C_HEMI_N = new THREE.Color('#70747c'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
 function setAction(name) { if (!actions[name] || current === actions[name]) return; curAnim = name; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
+// ---------- toon / cel shading ----------
+const TOON_GRAD = (() => { const d = new Uint8Array([70, 140, 205, 255]); const t = new THREE.DataTexture(d, 4, 1, THREE.RedFormat); t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
+const toonCache = new Map();
+function toToon(m) { if (!m || !(m.isMeshStandardMaterial || m.isMeshPhongMaterial || m.isMeshLambertMaterial) || m.userData.noToon) return m; let t = toonCache.get(m); if (t) return t;
+  t = new THREE.MeshToonMaterial({ gradientMap: TOON_GRAD, color: m.color, map: m.map, emissive: m.emissive, emissiveMap: m.emissiveMap, emissiveIntensity: m.emissiveIntensity ?? 1, normalMap: m.normalMap || null, alphaMap: m.alphaMap, transparent: m.transparent, opacity: m.opacity, alphaTest: m.alphaTest, side: m.side, vertexColors: m.vertexColors, fog: m.fog, depthWrite: m.depthWrite });
+  if (m.metalness > 0.5) t.color = m.color.clone().multiplyScalar(1.25); t.name = m.name; toonCache.set(m, t); toonCache.set(t, t); return t; }
+const outlineMat = new THREE.MeshBasicMaterial({ color: '#1a1020', side: THREE.BackSide, fog: true });
+outlineMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
+  #ifdef USE_SKINNING
+  vec3 oN = objectNormal;
+  #else
+  vec3 oN = normal;
+  #endif
+  vec4 cn = projectionMatrix * vec4(normalize(normalMatrix * oN), 0.0);
+  gl_Position.xy += normalize(cn.xy + 1e-6) * 0.006 * min(gl_Position.w, 12.0);`); };
+function addOutline(o) { if (o.userData.outlined || o.userData.isOutline || !o.geometry?.attributes.normal) return; o.userData.outlined = true;
+  const ol = o.isSkinnedMesh ? new THREE.SkinnedMesh(o.geometry, outlineMat) : new THREE.Mesh(o.geometry, outlineMat);
+  if (o.isSkinnedMesh) ol.bind(o.skeleton, o.bindMatrix); ol.userData.isOutline = true; ol.frustumCulled = false; ol.castShadow = false; ol.raycast = () => {};
+  ol.position.copy(o.position); ol.quaternion.copy(o.quaternion); ol.scale.copy(o.scale); o.parent.add(ol); }
+function toonify(root) { const outl = []; root.traverse(o => { if (!o.isMesh || o.userData.isOutline) return; if (Array.isArray(o.material)) o.material = o.material.map(toToon); else o.material = toToon(o.material); if (o.isSkinnedMesh || o.userData.outline) outl.push(o); }); outl.forEach(addOutline); }
+let toonFrame = 0;
 function tick() {
+  if ((toonFrame++ % 30) === 0) toonify(scene);
   if (treeLOD) treeLOD.update(camera.position);
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
   if (inGame && !modalOpen()) {
@@ -540,7 +600,7 @@ function tick() {
   } else { $('tip').classList.add('hidden'); if (!inGame) yaw += dt * 0.05; }
   { const P = player.position, gy = groundY(P.x, P.z) + 0.02; P.y = Math.abs(gy - P.y) > 2 ? gy : P.y + (gy - P.y) * Math.min(1, dt * 14); }
   mixer?.update(dt); retarget?.(actions.Idle ? actions.Idle.getEffectiveWeight() : 0); updateRemotes(dt); nameLabel.position.copy(player.position).y += 2.05; merchantObjs.forEach(m => m.mixer?.update(dt));
-  const target = tmp.copy(player.position).add(new THREE.Vector3(0, 1.5, 0));
+  const target = tmp.copy(player.position).add(new THREE.Vector3(0, window.__camY ?? 1.5, 0));
   const cd = inGame ? dist : 30; const cp = inGame ? pitch : 0.18;
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
   camera.position.y = Math.max(camera.position.y, (walkable(camera.position.x, camera.position.z) ? groundY(camera.position.x, camera.position.z) : -70) + 0.4); camera.lookAt(inGame ? target : new THREE.Vector3(0, 25, 0));
@@ -553,14 +613,17 @@ function tick() {
   sunLight.intensity = L(3.2, 0.35, ss(k, 0, 0.8)); sunLight.color.lerpColors(C_SUN, C_MOON, ss(k, 0.2, 0.9));
   hemi.intensity = L(1.1, 0.4, k); hemi.color.lerpColors(C_HEMI, C_HEMI_N, k);
   scene.fog.color.lerpColors(FOG, FOG_N, ss(k, 0, 0.9)); scene.environmentIntensity = L(0.7, 0.18, k);
-  renderer.toneMappingExposure = L(0.85, 1.0, k); bloom.strength = L(0.15, 0.32, k);
+  renderer.toneMappingExposure = L(0.85, 1.0, k); bloom.strength = L(0.05, 0.12, k);
   const glow = L(1, 3, ss(k, 0.1, 1));
   skylineMat.emissiveIntensity = 1.2 * glow; panoMat.color.setRGB(lerp(0.75, 1.15, k), lerp(0.55, 1.1, k), lerp(0.6, 1.2, k)); panoMat.opacity = lerp(0.7, 1, ss(k, 0, 0.8)); lampMat.color.copy(C_LAMP).multiplyScalar(2.2 * glow); stringMats.forEach(m => m.color.copy(m.userData.base).multiplyScalar(1.2 * glow));
   pointLights.concat(pathLights).forEach(pl => pl.intensity = (pl.userData.base ??= pl.intensity) * L(0.5, 1.6, k));
   fenceGlow.material.color.setHSL((t * 0.03) % 1, 0.7, 0.6).multiplyScalar(1.5 * glow);
   towerLights.forEach((r, i) => r.material.color.setHSL((t * 0.05 + i * 0.25) % 1, 0.8, 0.6).multiplyScalar(2.5 * glow));
   myMarker.rotation.y = t * 2;
-  quality === 'high' ? composer.render() : renderer.render(scene, camera);
+  { const ov = scene.overrideMaterial, bgc = scene.background, fg = scene.fog; scene.overrideMaterial = nrmMat; scene.background = null; scene.fog = null; nameLabel.visible = false; renderer.setRenderTarget(nrmRT); renderer.clear(); renderer.render(scene, camera); renderer.setRenderTarget(null); scene.overrideMaterial = ov; scene.background = bgc; scene.fog = fg; nameLabel.visible = true; }
+  if ((toonFrame % 30) === 1) { const bl = []; scene.traverse(o => { if (o.isMesh && o.material === lampMat) bl.push(o.getWorldPosition(new THREE.Vector3())); }); pointLights.forEach(p => bl.push(p.position)); bl.sort((a, b) => a.distanceToSquared(player.position) - b.distanceToSquared(player.position)); inkPass.uniforms.lamps.value.forEach((v, i) => bl[i] ? v.copy(bl[i]) : v.set(0, -1e4, 0)); }
+  inkPass.uniforms.invProj.value.copy(camera.projectionMatrixInverse); inkPass.uniforms.camW.value.copy(camera.matrixWorld);
+  inkPass.uniforms.thr.value = THREE.MathUtils.lerp(0.3, 0.12, dayK); composer.render();
   requestAnimationFrame(tick);
 }
 
@@ -659,9 +722,9 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
     for (const pr of mo.cfg.props || []) gl.load(import.meta.env.BASE_URL + pr.model, m => { const o = m.scene; o.scale.setScalar(pr.scale || 1); const bb = new THREE.Box3().setFromObject(o); o.position.set(pr.x || 0, -bb.min.y, pr.z || 0); o.rotation.y = pr.rotY || 0; o.traverse(c => c.isMesh && (c.castShadow = c.receiveShadow = true)); mo.group.add(o); });
     const put = (npc, anims) => { npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI + (mo.cfg.rotY || 0); npc.scale.multiplyScalar(mo.cfg.scale || 1); mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const c = anims.find(a => /idle/i.test(a.name)) || anims[0]; c && mo.mixer.clipAction(c).play(); };
     const fallback = () => { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); put(npc, idle ? [idle] : []); };
-    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); const bb = new THREE.Box3().setFromObject(m.scene, true); put(m.scene, m.animations); m.scene.position.set(0, -bb.min.y * (mo.cfg.scale || 1) + (mo.cfg.sitY || 0), mo.cfg.sitZ || 0); m.scene.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.frustumCulled = false; } }); }, undefined, fallback); else fallback();
+    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); const bb = new THREE.Box3().setFromObject(m.scene, true); put(m.scene, m.animations); m.scene.position.set(0, -bb.min.y * (mo.cfg.scale || 1) + (mo.cfg.sitY || 0), mo.cfg.sitZ || 0); m.scene.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.frustumCulled = false; o.userData.outline = true; } }); }, undefined, fallback); else fallback();
   }
   $('loading').classList.add('hidden'); drawName(); myName ? showServers() : showProfile();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
 tick();
-window.__game = { remotes, SID, setChar: (k) => setChar(k), player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
+window.__game = { remotes, SID, setChar: (k) => setChar(k), player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, setDist: (v) => dist = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
