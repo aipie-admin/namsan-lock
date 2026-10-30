@@ -100,7 +100,7 @@ const groundMeshes = [];
 // fence plaza gets a full panoramic reveal)
 {
   const pts = [];
-  for (let z = FR - 2; z < PK.z1 + 26; z += 2.2) for (const sx of [-1, 1]) for (let x = 23.5; x < 44; x += 2.6) pts.push([sx * (x + Math.random() * 1.6), z + Math.random() * 1.5]);
+  for (let z = FR - 2; z < PK.z1 + 26; z += 2.2) for (const sx of [-1, 1]) for (let x = (z > PZ.z0 - 2 && z < PZ.z1 + 2 ? PZ.x + 1.2 : 23.5); x < 44; x += 2.6) pts.push([sx * (x + Math.random() * 1.6), z + Math.random() * 1.5]);
   for (let z = PK.z1 + 1; z < PK.z1 + 26; z += 2.4) for (let x = -24; x <= 24; x += 2.6) pts.push([x + Math.random(), z + Math.random()]);
   const im = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#244a2b', roughness: 0.9 }), pts.length);
   const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 1, 6).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: '#3b2a20', roughness: 1 }), pts.length);
@@ -140,7 +140,7 @@ let panoMat;
   const tex = new THREE.TextureLoader().load(import.meta.env.BASE_URL + 'models/pano.webp'); tex.colorSpace = THREE.SRGBColorSpace;
   panoMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, transparent: true, depthWrite: false });
   const cyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 128, 1, true), panoMat);
-  cyl.position.y = (1.6 - 0.15 * R) - TREE_V * H + H / 2; cyl.rotation.y = Math.PI / 2; cyl.renderOrder = -1; cyl.frustumCulled = false; scene.add(cyl);
+  cyl.position.y = (1.6 - 0.15 * R) - TREE_V * H + H / 2 - 230; // lowered: skyline just above horizon, image treeline behind summit treetops cyl.rotation.y = Math.PI / 2; cyl.renderOrder = -1; cyl.frustumCulled = false; scene.add(cyl);
 }
 
 const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd7a0').multiplyScalar(6) });
@@ -173,7 +173,7 @@ const pathLights = [];
   }
   const sm = new THREE.Mesh(mergeGeometries(steps.map(g => { g.clearGroups(); return g; })), stepMat); sm.receiveShadow = sm.castShadow = true; scene.add(sm); groundMeshes.push(sm);
   // plaza + parking lot lamps
-  for (const [x, z, y] of [[-20, PZ.z0 + 2, PZ.y], [20, PZ.z0 + 2, PZ.y], [-20, PZ.z1 - 2, PZ.y], [20, PZ.z1 - 2, PZ.y], [-20, PK.z0 + 2, PK.y], [20, PK.z0 + 2, PK.y], [-20, PK.z1 - 2, PK.y], [20, PK.z1 - 2, PK.y], [5, LAYOUT.spawnZ, PK.y]]) { rails.push(new THREE.CylinderGeometry(0.07, 0.1, 4.2, 8).translate(x, y + 2.1, z).toNonIndexed()); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(x, y + 4.3, z); scene.add(b); }
+  for (const [x, z, y] of [[-PZ.x + 1, PZ.z0 + 2, PZ.y], [PZ.x - 1, PZ.z0 + 2, PZ.y], [-PZ.x + 1, PZ.z1 - 8, PZ.y], [PZ.x - 1, PZ.z1 - 8, PZ.y], [-20, PK.z0 + 2, PK.y], [20, PK.z0 + 2, PK.y], [-20, PK.z1 - 2, PK.y], [20, PK.z1 - 2, PK.y], [5, LAYOUT.spawnZ, PK.y]]) { rails.push(new THREE.CylinderGeometry(0.07, 0.1, 4.2, 8).translate(x, y + 2.1, z).toNonIndexed()); const b = new THREE.Mesh(bulbGeo, lampMat); b.position.set(x, y + 4.3, z); scene.add(b); }
   // perimeter railings for the two wide areas
   for (const [A, y] of [[PZ, PZ.y], [PK, PK.y]]) for (const sx of [-1, 1]) { const len = A.z1 - A.z0; const r = new THREE.CylinderGeometry(0.04, 0.04, len, 6); r.rotateX(Math.PI / 2); r.translate(sx * (A.x - 0.1), y + 1.0, (A.z0 + A.z1) / 2); rails.push(r.toNonIndexed()); for (let z = A.z0; z <= A.z1; z += 2) rails.push(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 6).translate(sx * (A.x - 0.1), y + 0.5, z).toNonIndexed()); }
   for (const [A, y, zEdge] of [[PZ, PZ.y, PZ.z0], [PZ, PZ.y, PZ.z1], [PK, PK.y, PK.z0], [PK, PK.y, PK.z1]]) for (const sx of [-1, 1]) { const len = A.x - S1.w / 2 - 0.4; const r = new THREE.CylinderGeometry(0.04, 0.04, len, 6); r.rotateZ(Math.PI / 2); r.translate(sx * (S1.w / 2 + 0.4 + len / 2), y + 1.0, zEdge + (zEdge === A.z0 ? 0.1 : -0.1)); rails.push(r.toNonIndexed()); }
@@ -181,9 +181,9 @@ const pathLights = [];
   // string lights over the shop plaza
   const bulbG = new THREE.SphereGeometry(0.07, 8, 6); stringMats = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }); m.userData.base = new THREE.Color(c); return m; });
   const bulbs = stringMats.map(() => []);
-  for (let z = PZ.z0 + 4; z <= PZ.z1 - 4; z += 5) for (let x = -11; x <= 11; x += 0.9) { const y = PZ.y + 4.6 - (1 - (x / 11) ** 2) * 0.8; bulbs[Math.abs(Math.round(x * 10 + z)) % 4].push(new THREE.Vector3(x, y, z)); }
+  for (let z = PZ.z0 + 4; z <= PZ.z1 - 4; z += 5) for (let x = -11; x <= 11; x += 0.9) { if (Math.abs(x) > PZ.x - 1) continue; const y = PZ.y + 4.6 - (1 - (x / 11) ** 2) * 0.8; bulbs[Math.abs(Math.round(x * 10 + z)) % 4].push(new THREE.Vector3(x, y, z)); }
   bulbs.forEach((list, i) => { const im = new THREE.InstancedMesh(bulbG, stringMats[i], list.length); list.forEach((p, j) => im.setMatrixAt(j, new THREE.Matrix4().makeTranslation(p.x, p.y, p.z))); scene.add(im); });
-  for (let z = PZ.z0 + 4; z <= PZ.z1 - 4; z += 5) for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 6), iron); p.position.set(sx * 11.2, PZ.y + 2.4, z); scene.add(p); }
+  for (let z = PZ.z0 + 4; z <= PZ.z1 - 4; z += 5) for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 6), iron); p.position.set(sx * (PZ.x - 0.6), PZ.y + 2.4, z); scene.add(p); }
   // parked cars
   const carCols = ['#c0392b', '#ecf0f1', '#2c3e50', '#f1c40f', '#7f8c8d', '#16a085', '#8e44ad'];
   let ci = 0; for (const zc of [PK.z0 + 3, PK.z1 - 9]) for (let x = -18.7; x <= 18.7; x += 2.6) { if (Math.abs(x) < 5 || Math.random() < 0.3) continue; const car = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 4), new THREE.MeshStandardMaterial({ color: carCols[ci++ % carCols.length], metalness: 0.7, roughness: 0.25 })); body.position.y = 0.55; const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 2.1), new THREE.MeshStandardMaterial({ color: '#1b2430', metalness: 0.9, roughness: 0.1 })); top.position.set(0, 1.15, -0.2); car.add(body, top); car.traverse(o => o.castShadow = true); car.position.set(x, PK.y, zc + 3); scene.add(car); }
@@ -310,7 +310,7 @@ const merchantObjs = MERCHANTS.map(cfg => {
   const awn = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.8, 16, 1, true, 0, Math.PI), new THREE.MeshStandardMaterial({ color: cfg.awning, roughness: 0.6, side: THREE.DoubleSide }));
   awn.rotation.z = Math.PI / 2; awn.scale.set(1, 1, 0.5); awn.position.set(0, 2.5, 0.5);
   const poles = [-1.3, 1.3].flatMap(x => [0.2, 1.3].map(z => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.5), wood); m.position.set(x, 1.25, z); return m; }));
-  g.add(table, awn, ...poles);
+  if (cfg.stall !== false) g.add(table, awn, ...poles);
   // display locks on the table
   cfg.inventory.forEach((k, i) => { const t = TYPES[k]; if (!t) return; const m = new THREE.Mesh(getGeo(t.shape), lockMat(t.color)); m.position.set(-1 + i * (2 / Math.max(1, cfg.inventory.length - 1)), 0.98, 1.05); m.scale.setScalar(1.6); g.add(m); });
   const plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: canvasTex(512, 128, (c, w, h) => { c.fillStyle = 'rgba(30,15,40,.85)'; c.beginPath(); c.roundRect(4, 4, w - 8, h - 8, 30); c.fill(); c.fillStyle = '#ffd1e0'; c.font = 'bold 52px sans-serif'; c.textAlign = 'center'; c.fillText('🔒 ' + cfg.name, w / 2, 84); }), depthWrite: false }));
@@ -576,7 +576,12 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
   setChar = (k) => { charSel = k; localStorage.setItem('namsan_char', k); const old = player.children[0]; const r = old ? old.rotation.y : Math.PI; if (old) player.remove(old); const m = CHARS[k]; m.rotation.y = r; player.add(m); retarget = rts[k]; };
   facing = Math.PI; setChar(charSel);
   setAction('Idle');
-  for (const mo of merchantObjs) { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI; mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const idle = g.animations.find(c => c.name === 'Idle'); idle && mo.mixer.clipAction(idle).play(); }
+  const idle = g.animations.find(c => c.name === 'Idle');
+  for (const mo of merchantObjs) {
+    const put = (npc, anims) => { npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI + (mo.cfg.rotY || 0); npc.scale.multiplyScalar(mo.cfg.scale || 1); mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const c = anims.find(a => /idle/i.test(a.name)) || anims[0]; c && mo.mixer.clipAction(c).play(); };
+    const fallback = () => { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); put(npc, idle ? [idle] : []); };
+    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); put(m.scene, m.animations); }, undefined, fallback); else fallback();
+  }
   $('loading').classList.add('hidden'); drawName(); myName ? showServers() : showProfile();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
 tick();
