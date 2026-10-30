@@ -459,11 +459,17 @@ function makeRetarget(src, tgt, ref) {
   // 차렷 (attention) pose: rest pose with legs + arms aimed straight down (computed once, local quats)
   const att = new Map(); { const save = []; tgt.traverse(o => o.isBone && save.push([o, o.quaternion.clone()]));
     const B = {}; tgt.traverse(o => o.isBone && (B[o.name.replace(/^mixamorig:?/, '')] = o)); const down = new THREE.Vector3(0, -1, 0), a = new THREE.Vector3(), b = new THREE.Vector3();
-    const aim = (bn, cn) => { const bo = B[bn], c = B[cn]; if (!bo || !c) return; tgt.updateMatrixWorld(true); const cur = c.getWorldPosition(a).sub(bo.getWorldPosition(b)).normalize(); const dq = new THREE.Quaternion().setFromUnitVectors(cur, down); const bw = bo.getWorldQuaternion(new THREE.Quaternion()), pw = bo.parent.getWorldQuaternion(new THREE.Quaternion()); bo.quaternion.copy(pw.invert().multiply(dq.multiply(bw))); };
-    for (const sd of ['Left', 'Right']) { aim(sd + 'UpLeg', sd + 'Leg'); aim(sd + 'Leg', sd + 'Foot'); aim(sd + 'Arm', sd + 'ForeArm'); aim(sd + 'ForeArm', sd + 'Hand'); }
+    tgt.updateMatrixWorld(true); const side = (B.LeftUpLeg && B.RightUpLeg) ? B.LeftUpLeg.getWorldPosition(new THREE.Vector3()).sub(B.RightUpLeg.getWorldPosition(new THREE.Vector3())).setY(0).normalize() : new THREE.Vector3(1, 0, 0);
+    const fwd = new THREE.Vector3().crossVectors(side, new THREE.Vector3(0, 1, 0)).negate(); // character forward
+    const D = (sd, out, fw) => new THREE.Vector3(0, -1, 0).addScaledVector(side, sd === 'Left' ? out : -out).addScaledVector(fwd, fw).normalize();
+    const aim = (bn, cn, dir = down) => { const bo = B[bn], c = B[cn]; if (!bo || !c) return; tgt.updateMatrixWorld(true); const cur = c.getWorldPosition(a).sub(bo.getWorldPosition(b)).normalize(); const dq = new THREE.Quaternion().setFromUnitVectors(cur, dir); const bw = bo.getWorldQuaternion(new THREE.Quaternion()), pw = bo.parent.getWorldQuaternion(new THREE.Quaternion()); bo.quaternion.copy(pw.invert().multiply(dq.multiply(bw))); };
+    for (const sd of ['Left', 'Right']) { aim(sd + 'UpLeg', sd + 'Leg', D(sd, 0.05, 0)); aim(sd + 'Leg', sd + 'Foot', D(sd, 0.02, -0.02)); aim(sd + 'Arm', sd + 'ForeArm', D(sd, 0.16, 0.0)); aim(sd + 'ForeArm', sd + 'Hand', D(sd, 0.08, 0.2)); } // relaxed: arms slightly out, soft elbows, feet ~hip width
     for (const e of list) att.set(e.t, e.t.quaternion.clone()); for (const [o, q] of save) o.quaternion.copy(q); tgt.updateMatrixWorld(true); }
+  const chest = list.filter(e => /Spine0?2$|Spine1$|^Spine$/.test(e.t.name.replace(/^mixamorig:?/, ''))).map(e => e.t), bq = new THREE.Quaternion(), bx = new THREE.Vector3(1, 0, 0);
+  const breathe = (a) => { if (!a) return; bq.setFromAxisAngle(bx, a); for (const b of chest) b.quaternion.multiply(bq); };
   return (w = 0) => {
-    if (w >= 0.999) { for (const e of list) e.t.quaternion.copy(att.get(e.t)); return; }
+    const br = Math.sin(performance.now() * 0.0021) * 0.012; // subtle breathing
+    if (w >= 0.999) { for (const e of list) e.t.quaternion.copy(att.get(e.t)); breathe(br); return; }
     src.updateMatrixWorld(true); src.matrixWorld.decompose(tmpV, rootQ, tmpS); rootQ.invert();
     tgt.updateMatrixWorld(true); const tRootInv = new THREE.Quaternion(); tgt.matrixWorld.decompose(tmpV, tRootInv, tmpS); tRootInv.invert();
     for (const e of list) { // parent-first order (traverse)
@@ -471,7 +477,7 @@ function makeRetarget(src, tgt, ref) {
       e.t.parent.updateMatrixWorld(); e.t.parent.matrixWorld.decompose(tmpV, pq, tmpS); pq.premultiply(tRootInv);
       e.t.quaternion.copy(pq.invert().multiply(want)); e.t.updateMatrixWorld(true);
     }
-    if (w > 0) for (const e of list) e.t.quaternion.slerp(att.get(e.t), w);
+    if (w > 0) { for (const e of list) e.t.quaternion.slerp(att.get(e.t), w); breathe(br * w); }
   };
 }
 let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
