@@ -310,11 +310,11 @@ const merchantObjs = MERCHANTS.map(cfg => {
   const awn = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.8, 16, 1, true, 0, Math.PI), new THREE.MeshStandardMaterial({ color: cfg.awning, roughness: 0.6, side: THREE.DoubleSide }));
   awn.rotation.z = Math.PI / 2; awn.scale.set(1, 1, 0.5); awn.position.set(0, 2.5, 0.5);
   const poles = [-1.3, 1.3].flatMap(x => [0.2, 1.3].map(z => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.5), wood); m.position.set(x, 1.25, z); return m; }));
-  if (cfg.stall !== false) g.add(table, awn, ...poles);
+  if (cfg.stall === 'desk') { table.scale.set(0.6, 0.85, 0.7); table.position.set(0, 0.38, 0.75); g.add(table); } else if (cfg.stall !== false) g.add(table, awn, ...poles);
   // display locks on the table
-  cfg.inventory.forEach((k, i) => { const t = TYPES[k]; if (!t) return; const m = new THREE.Mesh(getGeo(t.shape), lockMat(t.color)); m.position.set(-1 + i * (2 / Math.max(1, cfg.inventory.length - 1)), 0.98, 1.05); m.scale.setScalar(1.6); g.add(m); });
+  cfg.inventory.forEach((k, i) => { const t = TYPES[k]; if (!t) return; const m = new THREE.Mesh(getGeo(t.shape), lockMat(t.color)); const dk = cfg.stall === 'desk'; m.position.set((dk ? 0.6 : 1) * (-1 + i * (2 / Math.max(1, cfg.inventory.length - 1))), dk ? 0.81 : 0.98, dk ? 0.85 : 1.05); m.scale.setScalar(dk ? 1.1 : 1.6); g.add(m); });
   const plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: canvasTex(512, 128, (c, w, h) => { c.fillStyle = 'rgba(30,15,40,.85)'; c.beginPath(); c.roundRect(4, 4, w - 8, h - 8, 30); c.fill(); c.fillStyle = '#ffd1e0'; c.font = 'bold 52px sans-serif'; c.textAlign = 'center'; c.fillText('🔒 ' + cfg.name, w / 2, 84); }), depthWrite: false }));
-  plate.scale.set(2.4, 0.6, 1); plate.position.set(0, 3.4, 0.5); g.add(plate);
+  if (cfg.stall === 'desk') { plate.scale.set(1.4, 0.35, 1); plate.position.set(0, 1.85, 0); } else { plate.scale.set(2.4, 0.6, 1); plate.position.set(0, 3.4, 0.5); } g.add(plate);
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); scene.add(g);
   g.updateMatrixWorld(); return { cfg, group: g, pos: g.localToWorld(new THREE.Vector3(0, 0, 0.9)), mixer: null };
 });
@@ -451,6 +451,7 @@ function bindRots(root) { const out = {}; root.updateMatrixWorld(true); const ri
 const FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI), FLIP_INV = FLIP.clone().invert(); // user model faces +Z, Soldier faces -Z
 function makeRetarget(src, tgt, ref) {
   // Soldier's node rest pose isn't a T-pose but its skin bind pose is: snap it to bind pose (skeleton.pose()) and read rotations.
+  const rest = tgt.userData.rest || REST.get(tgt.userData.restKey); if (rest) tgt.traverse(o => { const r = o.isBone && rest[o.name]; if (r) { o.quaternion.copy(r[0]); o.position.copy(r[1]); } }); tgt.updateMatrixWorld(true); // clones of an animated model copy its current pose -> reset to rest first
   const tb = bindRots(tgt); ref.traverse(o => o.isSkinnedMesh && o.skeleton.pose()); const sb = bindRots(ref); const sBones = {}; src.traverse(o => o.isBone && (sBones[o.name] = o));
   const list = []; const MAP = { Spine02: 'Spine', Spine01: 'Spine1', Spine: 'Spine2', neck: 'Neck' }; // user rig (no prefix) -> mixamo names
   tgt.traverse(o => { if (!o.isBone) return; const sn = sBones[o.name] ? o.name : 'mixamorig' + (MAP[o.name] || o.name); if (sBones[sn] && sb[sn] && tb[o.name]) list.push({ t: o, s: sBones[sn], sInv: sb[sn].clone().invert(), tr: tb[o.name] }); });
@@ -562,12 +563,18 @@ function updateRemotes(dt) {
 applyQuality();
 const gl = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const loadGLB = (f) => new Promise((res, rej) => gl.load(import.meta.env.BASE_URL + 'models/' + f, res, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, rej));
-let SOLDIER, REF; const LOS = {};
+let SOLDIER, REF; const LOS = {}; const REST = new Map();
+const saveRest = (m, key) => { const r = {}; m.traverse(o => o.isBone && (r[o.name] = [o.quaternion.clone(), o.position.clone()])); REST.set(key, r); m.userData.restKey = key; };
 let charSel = localStorage.getItem('namsan_char') || 'm'; const CHARS = {};
 Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'), loadGLB('char_m_lo.glb'), loadGLB('char_f_lo.glb')]).then(([cm, cf, g, lm, lf]) => {
-  SOLDIER = g; for (const [k, c] of [['m', lm], ['f', lf]]) { const m = c.scene; const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); m.traverse(o => o.isMesh && (o.frustumCulled = false)); LOS[k] = m; }
+  { // calm idle: Soldier's Idle is a combat stance -> use the walk cycle's 'passing' frame (feet together, arms at sides), frozen
+    const walk = g.animations.find(c => c.name === 'Walk'), probe = skClone(g.scene), pm = new THREE.AnimationMixer(probe), pa = pm.clipAction(walk).play(); let L, R; probe.traverse(o => { if (o.name === 'mixamorigLeftFoot') L = o; if (o.name === 'mixamorigRightFoot') R = o; });
+    let best = 0, bd = 1e9; const a = new THREE.Vector3(), b = new THREE.Vector3(); for (let f = 0; f < 60; f++) { const t = walk.duration * f / 60; pm.setTime(t); probe.updateMatrixWorld(true); const d = L.getWorldPosition(a).distanceTo(R.getWorldPosition(b)); if (d < bd) { bd = d; best = t; } }
+    const tr = walk.tracks.map(k => { const n = k.getValueSize(), v = k.createInterpolant().evaluate(best).slice(0, n); return new k.constructor(k.name, [0, 1], [...v, ...v]); });
+    const calm = new THREE.AnimationClip('Idle', 1, tr); g.animations = g.animations.filter(c => c.name !== 'Idle').concat(calm); }
+  SOLDIER = g; for (const [k, c] of [['m', lm], ['f', lf]]) { const m = c.scene; const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); m.traverse(o => o.isMesh && (o.frustumCulled = false)); LOS[k] = m; saveRest(m, 'lo' + k); }
   for (const [k, c] of [['m', cm], ['f', cf]]) { const m = c.scene; m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
-    const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); CHARS[k] = m; }
+    const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); CHARS[k] = m; saveRest(m, 'hi' + k); }
   // user characters have no animations -> drive them from a hidden Soldier rig (mixamo clips),
   // retargeted in world space using each rig's bind pose so differing rest orientations don't break it.
   const src = skClone(g.scene); src.visible = false; scene.add(src);
@@ -581,7 +588,7 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
     for (const pr of mo.cfg.props || []) gl.load(import.meta.env.BASE_URL + pr.model, m => { const o = m.scene; o.scale.setScalar(pr.scale || 1); const bb = new THREE.Box3().setFromObject(o); o.position.set(pr.x || 0, -bb.min.y, pr.z || 0); o.rotation.y = pr.rotY || 0; o.traverse(c => c.isMesh && (c.castShadow = c.receiveShadow = true)); mo.group.add(o); });
     const put = (npc, anims) => { npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI + (mo.cfg.rotY || 0); npc.scale.multiplyScalar(mo.cfg.scale || 1); mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const c = anims.find(a => /idle/i.test(a.name)) || anims[0]; c && mo.mixer.clipAction(c).play(); };
     const fallback = () => { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); put(npc, idle ? [idle] : []); };
-    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); put(m.scene, m.animations); }, undefined, fallback); else fallback();
+    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); const bb = new THREE.Box3().setFromObject(m.scene, true); put(m.scene, m.animations); m.scene.position.set(0, -bb.min.y * (mo.cfg.scale || 1) + (mo.cfg.sitY || 0), mo.cfg.sitZ || 0); m.scene.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.frustumCulled = false; } }); }, undefined, fallback); else fallback();
   }
   $('loading').classList.add('hidden'); drawName(); myName ? showServers() : showProfile();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
