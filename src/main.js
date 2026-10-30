@@ -456,7 +456,14 @@ function makeRetarget(src, tgt, ref) {
   const list = []; const MAP = { Spine02: 'Spine', Spine01: 'Spine1', Spine: 'Spine2', neck: 'Neck' }; // user rig (no prefix) -> mixamo names
   tgt.traverse(o => { if (!o.isBone) return; const sn = sBones[o.name] ? o.name : 'mixamorig' + (MAP[o.name] || o.name); if (sBones[sn] && sb[sn] && tb[o.name]) list.push({ t: o, s: sBones[sn], sInv: sb[sn].clone().invert(), tr: tb[o.name] }); });
   const qs = new THREE.Quaternion(), rootQ = new THREE.Quaternion(), pq = new THREE.Quaternion(), tmpV = new THREE.Vector3(), tmpS = new THREE.Vector3(), want = new THREE.Quaternion();
-  return () => {
+  // 차렷 (attention) pose: rest pose with legs + arms aimed straight down (computed once, local quats)
+  const att = new Map(); { const save = []; tgt.traverse(o => o.isBone && save.push([o, o.quaternion.clone()]));
+    const B = {}; tgt.traverse(o => o.isBone && (B[o.name.replace(/^mixamorig:?/, '')] = o)); const down = new THREE.Vector3(0, -1, 0), a = new THREE.Vector3(), b = new THREE.Vector3();
+    const aim = (bn, cn) => { const bo = B[bn], c = B[cn]; if (!bo || !c) return; tgt.updateMatrixWorld(true); const cur = c.getWorldPosition(a).sub(bo.getWorldPosition(b)).normalize(); const dq = new THREE.Quaternion().setFromUnitVectors(cur, down); const bw = bo.getWorldQuaternion(new THREE.Quaternion()), pw = bo.parent.getWorldQuaternion(new THREE.Quaternion()); bo.quaternion.copy(pw.invert().multiply(dq.multiply(bw))); };
+    for (const sd of ['Left', 'Right']) { aim(sd + 'UpLeg', sd + 'Leg'); aim(sd + 'Leg', sd + 'Foot'); aim(sd + 'Arm', sd + 'ForeArm'); aim(sd + 'ForeArm', sd + 'Hand'); }
+    for (const e of list) att.set(e.t, e.t.quaternion.clone()); for (const [o, q] of save) o.quaternion.copy(q); tgt.updateMatrixWorld(true); }
+  return (w = 0) => {
+    if (w >= 0.999) { for (const e of list) e.t.quaternion.copy(att.get(e.t)); return; }
     src.updateMatrixWorld(true); src.matrixWorld.decompose(tmpV, rootQ, tmpS); rootQ.invert();
     tgt.updateMatrixWorld(true); const tRootInv = new THREE.Quaternion(); tgt.matrixWorld.decompose(tmpV, tRootInv, tmpS); tRootInv.invert();
     for (const e of list) { // parent-first order (traverse)
@@ -464,6 +471,7 @@ function makeRetarget(src, tgt, ref) {
       e.t.parent.updateMatrixWorld(); e.t.parent.matrixWorld.decompose(tmpV, pq, tmpS); pq.premultiply(tRootInv);
       e.t.quaternion.copy(pq.invert().multiply(want)); e.t.updateMatrixWorld(true);
     }
+    if (w > 0) for (const e of list) e.t.quaternion.slerp(att.get(e.t), w);
   };
 }
 let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
@@ -500,7 +508,7 @@ function tick() {
     const tip = $('tip'); if (nl) { const sp = slotInfo(nl.slot).pos.clone().project(camera); tip.style.left = (sp.x + 1) / 2 * innerWidth + 'px'; tip.style.top = (1 - sp.y) / 2 * innerHeight + 'px'; tip.innerHTML = `“${esc(nl.message)}”<br><small>— ${esc(nl.nickname)}</small>`; tip.classList.remove('hidden'); } else tip.classList.add('hidden');
   } else { $('tip').classList.add('hidden'); if (!inGame) yaw += dt * 0.05; }
   { const P = player.position, gy = groundY(P.x, P.z) + 0.02; P.y = Math.abs(gy - P.y) > 2 ? gy : P.y + (gy - P.y) * Math.min(1, dt * 14); }
-  mixer?.update(dt); retarget?.(); updateRemotes(dt); nameLabel.position.copy(player.position).y += 2.05; merchantObjs.forEach(m => m.mixer?.update(dt));
+  mixer?.update(dt); retarget?.(actions.Idle ? actions.Idle.getEffectiveWeight() : 0); updateRemotes(dt); nameLabel.position.copy(player.position).y += 2.05; merchantObjs.forEach(m => m.mixer?.update(dt));
   const target = tmp.copy(player.position).add(new THREE.Vector3(0, 1.5, 0));
   const cd = inGame ? dist : 30; const cp = inGame ? pitch : 0.18;
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
@@ -556,7 +564,7 @@ function updateRemotes(dt) {
     G.x += (p.x - G.x) * f; G.y += (p.y - G.y) * f; G.z += (p.z - G.z) * f; let d = p.r - r.grp.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d)); r.grp.rotation.y += d * f; r.play(p.a); r.grp.visible = true;
     list.push([G.distanceTo(player.position), r]); }
   list.sort((a, b) => a[0] - b[0]);
-  list.forEach(([d, r], i) => { const hiOn = i < NEAR_HI && d < HI_DIST; r.hi.visible = hiOn; r.lo.visible = !hiOn && d < 200; if (!r.hi.visible && !r.lo.visible) return; r.mx.update(dt); (hiOn ? r.rtHi : r.rtLo)(); });
+  list.forEach(([d, r], i) => { const hiOn = i < NEAR_HI && d < HI_DIST; r.hi.visible = hiOn; r.lo.visible = !hiOn && d < 200; if (!r.hi.visible && !r.lo.visible) return; r.mx.update(dt); (hiOn ? r.rtHi : r.rtLo)(r.acts.Idle ? r.acts.Idle.getEffectiveWeight() : 0); });
 }
 
 // ---------- boot ----------
