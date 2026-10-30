@@ -24,3 +24,4 @@ label{display:block;font-size:13px;margin:8px 0;opacity:.9}input,textarea{width:
 #knob{position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.35)}
 #actBtn{position:fixed;right:28px;bottom:50px;width:72px;height:72px;border-radius:50%;font-size:28px;z-index:5}
 @media (pointer:coarse){#joy{display:block}#help{display:none}}
+#zone{position:fixed;top:22%;left:50%;transform:translateX(-50%);font-size:30px;font-weight:800;letter-spacing:4px;color:#fff;text-shadow:0 2px 16px #ff6b9a;opacity:0;pointer-events:none;z-index:6}#zone.show{animation:zt 2.4s ease}@keyframes zt{0%{opacity:0;transform:translate(-50%,10px)}15%,70%{opacity:1;transform:translate(-50%,0)}100%{opacity:0}}

@@ -8,11 +8,11 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createClient } from '@supabase/supabase-js';
 import { clone as skClone } from 'three/addons/utils/SkeletonUtils.js';
-import { MERCHANTS, GATE_ANGLE } from './merchants.js';
+import { MERCHANTS, GATE_ANGLE, ZONES } from './merchants.js';
 
 const SB = createClient('https://qcugwkkgmvpbaglgento.supabase.co', 'sb_publishable_dKwXKOiKrqsE4C4D5cUgpQ_4ig3YFqC', { auth: { persistSession: false } });
 const COLS = ['id', 'server_id', 'lock_type', 'message', 'nickname', 'slot', 'created_at'].join(',');
-const SERVERS = [{ id: 1, name: '서버 1 · 팔각정' }, { id: 2, name: '서버 2 · 봉수대' }, { id: 3, name: '서버 3 · 전망대' }];
+import { SERVERS } from './servers.js';
 const $ = (id) => document.getElementById(id);
 let device = localStorage.getItem('namsan_device');
 if (!device) { device = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, ''); localStorage.setItem('namsan_device', device); }
@@ -55,7 +55,9 @@ const hillY = (r) => r < PLAZA ? 0 : r < 112 ? -22 * THREE.MathUtils.smoothstep(
 const PATH = [];
 for (let k = 0; k <= 80; k++) { const u = k / 80; const th = GATE_ANGLE + 1.5 * (1 - u) + Math.sin(u * 9) * 0.06 * (1 - u); const r = 31 + 77 * Math.pow(1 - u, 1.15) + Math.sin(u * 14) * 2.5 * (1 - u); PATH.push(new THREE.Vector2(Math.cos(th) * r, Math.sin(th) * r)); }
 PATH.push(new THREE.Vector2(Math.cos(GATE_ANGLE) * 26, Math.sin(GATE_ANGLE) * 26));
-let PATH_LEN = 0; for (let i = 1; i < PATH.length; i++) PATH_LEN += PATH[i].distanceTo(PATH[i - 1]);
+let PATH_LEN = 0; const CUM = [0]; for (let i = 1; i < PATH.length; i++) { PATH_LEN += PATH[i].distanceTo(PATH[i - 1]); CUM.push(PATH_LEN); }
+function pathAt(t) { const L = t * PATH_LEN; let i = 1; while (i < PATH.length - 1 && CUM[i] < L) i++; const a = PATH[i - 1], b = PATH[i]; const f = (L - CUM[i - 1]) / (CUM[i] - CUM[i - 1] || 1); const dir = b.clone().sub(a).normalize(); return { pos: a.clone().lerp(b, THREE.MathUtils.clamp(f, 0, 1)), dir, n: new THREE.Vector2(-dir.y, dir.x) }; }
+function pathT(x, z) { let best = 1e9, bt = 0; const p = new THREE.Vector2(x, z); for (let i = 1; i < PATH.length; i++) { const a = PATH[i - 1], ab = PATH[i].clone().sub(a); const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1); const d = a.clone().addScaledVector(ab, t).distanceTo(p); if (d < best) { best = d; bt = (CUM[i - 1] + t * ab.length()) / PATH_LEN; } } return bt; }
 console.info('path length m', PATH_LEN.toFixed(1), '≈', (PATH_LEN / 2.2).toFixed(0), 's walk');
 function distToPath(x, z) { let best = 1e9; const p = new THREE.Vector2(x, z), ab = new THREE.Vector2(), ap = new THREE.Vector2(); for (let i = 1; i < PATH.length; i++) { const a = PATH[i - 1]; ab.subVectors(PATH[i], a); ap.subVectors(p, a); const t = THREE.MathUtils.clamp(ap.dot(ab) / ab.lengthSq(), 0, 1); best = Math.min(best, ap.sub(ab.multiplyScalar(t)).length()); } return best; }
 {
@@ -105,7 +107,7 @@ const pathLights = [];
   const road = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: stone, roughness: 0.85, side: THREE.DoubleSide })); road.receiveShadow = true; scene.add(road);
   const iron = new THREE.MeshStandardMaterial({ color: '#2b2b30', metalness: 0.85, roughness: 0.4 });
   const rails = [], poles = []; const bulbGeo = new THREE.SphereGeometry(0.22, 12, 8); let lastPost = null, dAcc = 0, lampAcc = 0, side = 1;
-  for (let i = 1; i < PATH.length - 3; i++) { const p = PATH[i], d = new THREE.Vector2().subVectors(PATH[i + 1], PATH[i - 1]).normalize(), n = new THREE.Vector2(-d.y, d.x);
+  for (let i = 1; i < PATH.length - 3; i++) { const shopZ = ZONES.find(z => z.shops); const fr = CUM[i] / PATH_LEN; if (fr > shopZ.from && fr < shopZ.to) { lastPost = null; continue; } const p = PATH[i], d = new THREE.Vector2().subVectors(PATH[i + 1], PATH[i - 1]).normalize(), n = new THREE.Vector2(-d.y, d.x);
     const outward = n.dot(p) > 0 ? n : n.clone().negate(); const rx = p.x + outward.x * 2.05, rz = p.y + outward.y * 2.05, ry = hillY(Math.hypot(rx, rz));
     poles.push(new THREE.CylinderGeometry(0.04, 0.04, 1.0, 6).translate(rx, ry + 0.5, rz));
     const cur = new THREE.Vector3(rx, ry + 0.95, rz); if (lastPost) { const len = cur.distanceTo(lastPost); const r = new THREE.CylinderGeometry(0.035, 0.035, len, 6); r.translate(0, len / 2, 0); r.applyMatrix4(new THREE.Matrix4().lookAt(new THREE.Vector3(), cur.clone().sub(lastPost), new THREE.Vector3(0, 1, 0)).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2))); r.translate(lastPost.x, lastPost.y, lastPost.z); rails.push(r); } lastPost = cur;
@@ -122,6 +124,17 @@ const pathLights = [];
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: canvasTex(256, 128, (g2, w, h) => { g2.fillStyle = '#0f6a3a'; g2.fillRect(0, 0, w, h); g2.fillStyle = '#fff'; g2.font = 'bold 30px sans-serif'; g2.textAlign = 'center'; g2.fillText('남산공원 주차장', w / 2, 52); g2.font = '22px sans-serif'; g2.fillText('🚌 01A · N서울타워 ↑', w / 2, 96); }) }));
   sign.position.set(0, 2.1, -0.71); bus.add(roof, back, bench, sign); bus.traverse(o => o.castShadow = true);
   const ba = ang - 0.09; bus.position.set(Math.cos(ba) * 112, -22, Math.sin(ba) * 112); bus.lookAt(0, -22, 0); scene.add(bus);
+}
+
+// ---------- stairs steps & shopping street ----------
+{
+  const stepMat = new THREE.MeshStandardMaterial({ color: '#9b8f84', roughness: 0.8 });
+  const steps = [];
+  for (const z of ZONES.filter(z => z.stairs)) { for (let t = z.from; t < z.to; t += 0.35 / PATH_LEN) { const { pos, dir } = pathAt(t); const y = hillY(Math.max(0, pos.length() - 1.8)); const g = new THREE.BoxGeometry(3.5, 0.24, 0.36); g.rotateY(Math.atan2(dir.x, dir.y)); g.translate(pos.x, y + 0.0, pos.y); steps.push(g.toNonIndexed()); } }
+  const sm = new THREE.Mesh(mergeGeometries(steps), stepMat); sm.receiveShadow = true; sm.castShadow = true; scene.add(sm);
+  // shopping street: string lights over the path
+  const sz = ZONES.find(z => z.shops); const bulbG = new THREE.SphereGeometry(0.07, 8, 6); const cols = ['#ff7eb6', '#ffd27a', '#8fd0ff', '#b6ff8f'].map(c => new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2) }));
+  for (let t = sz.from; t < sz.to; t += 1.2 / PATH_LEN) { const { pos, n } = pathAt(t); const y = hillY(pos.length()) + 3.3 + Math.sin(t * 900) * 0.15; for (const s of [-1, 0, 1]) { const b = new THREE.Mesh(bulbG, cols[(Math.round(t * 1000) + s + 1) % 4]); b.position.set(pos.x + n.x * s * 1.2, y - Math.abs(s) * 0.2, pos.y + n.y * s * 1.2); scene.add(b); } }
 }
 
 // ---------- N Seoul Tower ----------
@@ -232,8 +245,9 @@ function buildDecor(serverId) {
 
 // ---------- merchants (data-driven, see merchants.js) ----------
 const merchantObjs = MERCHANTS.map(cfg => {
-  const pos = new THREE.Vector3(Math.cos(cfg.angle) * cfg.radius, 0, Math.sin(cfg.angle) * cfg.radius);
-  const g = new THREE.Group(); g.position.copy(pos); g.lookAt(0, 0, 0); g.rotateY(Math.PI); // face outward toward gate/path
+  const g = new THREE.Group();
+  if (cfg.pathT != null) { const { pos: pp, n } = pathAt(cfg.pathT); const x = pp.x + n.x * cfg.side * 3.6, z = pp.y + n.y * cfg.side * 3.6; g.position.set(x, hillY(Math.hypot(x, z)), z); g.lookAt(pp.x, g.position.y, pp.y); }
+  else { g.position.set(Math.cos(cfg.angle) * cfg.radius, 0, Math.sin(cfg.angle) * cfg.radius); g.lookAt(0, 0, 0); g.rotateY(Math.PI); }
   const wood = new THREE.MeshStandardMaterial({ color: '#7a4b2a', roughness: 0.7 });
   const table = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.9, 0.9), wood); table.position.set(0, 0.45, 0.9);
   const awn = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.8, 16, 1, true, 0, Math.PI), new THREE.MeshStandardMaterial({ color: cfg.awning, roughness: 0.6, side: THREE.DoubleSide }));
@@ -245,9 +259,9 @@ const merchantObjs = MERCHANTS.map(cfg => {
   const plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: canvasTex(512, 128, (c, w, h) => { c.fillStyle = 'rgba(30,15,40,.85)'; c.beginPath(); c.roundRect(4, 4, w - 8, h - 8, 30); c.fill(); c.fillStyle = '#ffd1e0'; c.font = 'bold 52px sans-serif'; c.textAlign = 'center'; c.fillText('🔒 ' + cfg.name, w / 2, 84); }), depthWrite: false }));
   plate.scale.set(2.4, 0.6, 1); plate.position.set(0, 3.4, 0.5); g.add(plate);
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); scene.add(g);
-  return { cfg, group: g, pos: g.localToWorld(new THREE.Vector3(0, 0, 0.9)), mixer: null };
+  g.updateMatrixWorld(); return { cfg, group: g, pos: g.localToWorld(new THREE.Vector3(0, 0, 0.9)), mixer: null };
 });
-let heldType = null;
+let heldType = null, curZone = null;
 
 // ---------- character ----------
 const player = new THREE.Group(); scene.add(player); const SPAWN = PATH[0]; player.position.set(SPAWN.x, hillY(SPAWN.length()), SPAWN.y);
@@ -257,7 +271,7 @@ const myMarker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.Me
 // ---------- post processing / quality ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.6, 0.85); composer.addPass(bloom);
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9); composer.addPass(bloom);
 composer.addPass(new OutputPass());
 function applyQuality() {
   const hi = quality === 'high';
@@ -282,7 +296,7 @@ function rebuildLocks() {
   const my = mine[serverId] && locks.find(l => l.id === mine[serverId]);
   myMarker.visible = !!my; if (my) myMarker.position.copy(slotInfo(my.slot).pos).setY(slotInfo(my.slot).pos.y + 0.22);
   $('lockCount').textContent = `🔒 ${locks.length}개`;
-  $('status').textContent = mine[serverId] ? '💗 이 서버에 이미 자물쇠를 걸었어요 (분홍 표시)' : (heldType ? '펜스 가까이 가서 E를 눌러 자물쇠를 걸어보세요' : '산책로를 따라 올라가 펜스 입구의 자물쇠 상인을 찾아가세요');
+  $('status').textContent = mine[serverId] ? '💗 이 서버에 이미 자물쇠를 걸었어요 (분홍 표시)' : (heldType ? '펜스 가까이 가서 E를 눌러 자물쇠를 걸어보세요' : '계단과 상점가를 지나 올라가며 자물쇠 상인을 찾아가세요');
 }
 async function loadLocks() { const { data, error } = await SB.from('namsan_locks').select(COLS).eq('server_id', serverId).order('id').limit(2000); if (!error) { locks = data; rebuildLocks(); } }
 async function loadMine() { const { data } = await SB.rpc('namsan_mine', { p_device: device }); mine = {}; (data || []).forEach(r => mine[r.server_id] = r.id); }
@@ -293,22 +307,22 @@ async function showServers() {
   for (const s of SERVERS) {
     const { count } = await SB.from('namsan_locks').select('id', { count: 'exact', head: true }).eq('server_id', s.id);
     const b = document.createElement('button'); b.className = 'srv';
-    b.innerHTML = `<span>${s.name}</span><small>자물쇠 ${count ?? 0}개${mine[s.id] ? ' · 💗 내 자물쇠 있음' : ''}</small>`;
+    b.innerHTML = `<span>${s.emoji} <b>${s.name}</b><br><small>${s.desc}</small></span><small>자물쇠 ${count ?? 0}개${mine[s.id] ? ' · 💗 내 자물쇠 있음' : ''}</small>`;
     b.onclick = () => enter(s); list.appendChild(b);
   }
 }
-async function enter(s) { serverId = s.id; $('srvName').textContent = s.name; buildDecor(s.id); $('servers').classList.add('hidden'); $('hud').classList.remove('hidden'); inGame = true; await loadLocks(); }
+async function enter(s) { serverId = s.id; $('srvName').textContent = s.emoji + ' ' + s.name; $('msg').placeholder = s.placeholder + ' (최대 60자)'; buildDecor(s.id); $('servers').classList.add('hidden'); $('hud').classList.remove('hidden'); inGame = true; curZone = null; await loadLocks(); }
 $('exitBtn').onclick = showServers;
 setInterval(() => inGame && loadLocks(), 15000);
 
 // lock type picker
 for (const [k, t] of Object.entries(TYPES)) { const d = document.createElement('div'); d.className = 'type' + (k === selType ? ' sel' : ''); d.dataset.k = k; d.innerHTML = `<div class="sw" style="background:radial-gradient(circle at 30% 30%,#fff8,${t.color} 45%,#0006)"></div>${t.name}`; d.onclick = () => { selType = k; document.querySelectorAll('.type').forEach(x => x.classList.remove('sel')); d.classList.add('sel'); }; $('types').appendChild(d); }
 let shopMerchant = null;
-function openShop(m) { shopMerchant = m; $('shopName').textContent = '🔒 ' + m.cfg.name; $('shopGreet').textContent = mine[serverId] ? '이 서버에는 벌써 자물쇠를 걸었구먼! 또 와요~' : m.cfg.greeting; document.querySelectorAll('.type').forEach(d => d.style.display = m.cfg.inventory.includes(d.dataset.k) ? '' : 'none'); if (!m.cfg.inventory.includes(selType)) selType = m.cfg.inventory[0]; document.querySelectorAll('.type').forEach(d => d.classList.toggle('sel', d.dataset.k === selType)); $('buyBtn').disabled = !!mine[serverId]; $('shop').classList.remove('hidden'); }
+function openShop(m) { shopMerchant = m; $('shopName').textContent = '🔒 ' + m.cfg.name; $('shopGreet').textContent = mine[serverId] ? '이 서버에는 벌써 자물쇠를 걸었구먼! 또 와요~' : m.cfg.greeting; document.querySelectorAll('.type').forEach(d => d.style.display = m.cfg.inventory.includes(d.dataset.k) ? '' : 'none'); if (m.cfg.inventory.length && !m.cfg.inventory.includes(selType)) selType = m.cfg.inventory[0]; document.querySelectorAll('.type').forEach(d => d.classList.toggle('sel', d.dataset.k === selType)); const sells = m.cfg.inventory.length > 0; $('types').style.display = sells ? '' : 'none'; $('buyBtn').style.display = sells ? '' : 'none'; $('buyBtn').disabled = !!mine[serverId]; $('shop').classList.remove('hidden'); }
 $('shopClose').onclick = () => $('shop').classList.add('hidden');
 $('buyBtn').onclick = () => { heldType = selType; $('shop').classList.add('hidden'); flash(`${TYPES[heldType].name} 자물쇠를 받았어요! 펜스에 가서 걸어보세요.`); };
 const ERR = { PROFANITY: '욕설이나 비속어가 포함되어 있어 걸 수 없어요.', ALREADY_HUNG: '이 서버에는 이미 자물쇠를 걸었어요. (1인 1개)', SLOT_TAKEN: '그 자리는 방금 다른 사람이 걸었어요. 옆자리로 가보세요.' };
-function openModal() { if (mine[serverId]) return flash('이 서버에는 이미 자물쇠를 걸었어요. 수정·삭제는 할 수 없어요.'); if (pendingSlot == null) return; if (!heldType) return flash('먼저 입구의 자물쇠 상인에게 말을 걸어 자물쇠를 고르세요.'); selType = heldType; $('heldLock').textContent = '들고 있는 자물쇠: ' + TYPES[heldType].name; $('err').textContent = ''; $('modal').classList.remove('hidden'); $('msg').focus(); }
+function openModal() { if (mine[serverId]) return flash('이 서버에는 이미 자물쇠를 걸었어요. 수정·삭제는 할 수 없어요.'); if (pendingSlot == null) return; if (!heldType) return flash('먼저 상점가나 펜스 입구의 자물쇠 상인에게 자물쇠를 받으세요.'); selType = heldType; $('heldLock').textContent = '들고 있는 자물쇠: ' + TYPES[heldType].name; $('err').textContent = ''; $('modal').classList.remove('hidden'); $('msg').focus(); }
 $('cancelBtn').onclick = () => $('modal').classList.add('hidden');
 $('hangBtn').onclick = async () => {
   const msg = $('msg').value.trim(); if (!msg) { $('err').textContent = '메시지를 입력해주세요.'; return; }
@@ -354,7 +368,7 @@ function nearestFreeSlot() {
   return bd < 2.4 ? best : null;
 }
 function nearestLock() { let best = null, bd = 2.0; for (const L of locks) { const d = slotInfo(L.slot).pos.distanceTo(tmp.copy(player.position).setY(1)); if (d < bd) { bd = d; best = L; } } return best; }
-function walkable(x, z) { const r = Math.hypot(x, z); if (r > 7.6 && r < FR * Math.cos(Math.PI / SEG) - 0.45) return true; const da = Math.abs(Math.atan2(Math.sin(Math.atan2(z, x) - GATE_ANGLE), Math.cos(Math.atan2(z, x) - GATE_ANGLE))); if (r < 31 && r > 20 && da * r < GATE_HALF - 0.35) return true; if (r > 29 && distToPath(x, z) < 1.55) return true; const c = PATH[0].clone().setLength(117); return Math.hypot(x - c.x, z - c.y) < 10.5; }
+function walkable(x, z) { const r = Math.hypot(x, z); if (r > 7.6 && r < FR * Math.cos(Math.PI / SEG) - 0.45) return true; const da = Math.abs(Math.atan2(Math.sin(Math.atan2(z, x) - GATE_ANGLE), Math.cos(Math.atan2(z, x) - GATE_ANGLE))); if (r < 31 && r > 20 && da * r < GATE_HALF - 0.35) return true; if (r > 29 && distToPath(x, z) < 1.75) return true; const c = PATH[0].clone().setLength(117); return Math.hypot(x - c.x, z - c.y) < 10.5; }
 function setAction(name) { if (!actions[name] || current === actions[name]) return; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
@@ -370,12 +384,13 @@ function tick() {
       if (merchantObjs.some(m => Math.hypot(P.x - m.pos.x, P.z - m.pos.z) < 1.1)) { P.x -= dx; P.z -= dz; }
       setAction(run ? 'Run' : 'Walk'); } else setAction('Idle');
     if (player.children[0]) { const cur = player.children[0].rotation.y; let d = facing + Math.PI - cur; d = Math.atan2(Math.sin(d), Math.cos(d)); player.children[0].rotation.y = cur + d * Math.min(1, dt * 10); }
+    { const P = player.position, r = Math.hypot(P.x, P.z); const zn = r < 29 ? '펜스' : (ZONES.find(z => { const t = pathT(P.x, P.z); return t >= z.from && t < z.to; }) || ZONES[0]).name; if (zn !== curZone) { curZone = zn; const zt = $('zone'); zt.textContent = zn; zt.classList.remove('show'); void zt.offsetWidth; zt.classList.add('show'); } }
     pendingSlot = mine[serverId] ? null : nearestFreeSlot();
     const pr = $('prompt'); const nl = nearestLock();
     nearMerchant = merchantObjs.find(m => Math.hypot(player.position.x - m.pos.x, player.position.z - m.pos.z) < 2.8) || null;
     const touch = matchMedia('(pointer:coarse)').matches;
     if (nearMerchant) { pr.textContent = (touch ? '버튼' : 'E 키') + `: ${nearMerchant.cfg.name}와 대화하기`; pr.classList.remove('hidden'); }
-    else if (pendingSlot != null) { pr.textContent = heldType ? (touch ? '🔒 버튼을 눌러 자물쇠 걸기' : 'E 키를 눌러 자물쇠 걸기') : '자물쇠가 없어요 · 입구의 상인에게 먼저 가보세요'; pr.classList.remove('hidden'); } else pr.classList.add('hidden');
+    else if (pendingSlot != null) { pr.textContent = heldType ? (touch ? '🔒 버튼을 눌러 자물쇠 걸기' : 'E 키를 눌러 자물쇠 걸기') : '자물쇠가 없어요 · 자물쇠 상인에게 먼저 가보세요'; pr.classList.remove('hidden'); } else pr.classList.add('hidden');
     $('actBtn').classList.toggle('hidden', !nearMerchant && pendingSlot == null); $('actBtn').textContent = nearMerchant ? '💬' : '🔒';
     const tip = $('tip'); if (nl) { const sp = slotInfo(nl.slot).pos.clone().project(camera); tip.style.left = (sp.x + 1) / 2 * innerWidth + 'px'; tip.style.top = (1 - sp.y) / 2 * innerHeight + 'px'; tip.innerHTML = `“${esc(nl.message)}”<br><small>— ${esc(nl.nickname)}</small>`; tip.classList.remove('hidden'); } else tip.classList.add('hidden');
   } else { $('tip').classList.add('hidden'); if (!inGame) yaw += dt * 0.05; }
@@ -400,3 +415,4 @@ new GLTFLoader().load(import.meta.env.BASE_URL + 'models/soldier.glb', (g) => {
   $('loading').classList.add('hidden'); showServers();
 }, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, () => { $('loading').classList.add('hidden'); showServers(); });
 tick();
+window.__game = { player, setYaw: (v) => yaw = v, pathAt };

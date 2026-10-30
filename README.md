@@ -10,3 +10,10 @@ Three.js 3인칭 웹 게임. 남산공원 주차장에서 출발해 산책로(�
 ## 상인 추가하는 법
 `src/merchants.js`의 `MERCHANTS` 배열에 항목을 추가하세요 (id, name, angle, radius, greeting, inventory, awning).
 새 자물쇠 종류를 팔려면 `src/main.js`의 `TYPES`와 DB의 `lock_type` check 제약에 같이 추가해야 합니다.
+
+## 동선 (구간)
+주차장(스폰) → 계단 → 상점가 → 계단 → 펜스. 일반 걷기 속도로 약 60초. 구간 비율은 `src/merchants.js`의 `ZONES`.
+상점가 상인은 `pathT`(0~1 경로 비율)+`side`로 배치, 펜스 쪽은 `angle`+`radius`로 배치. `inventory: []`면 대화만 하는 가게.
+
+## 서버(테마) 추가하는 법
+`src/servers.js`의 `SERVERS`에 `{ id, emoji, name, desc, placeholder }`를 추가 (id 1~100, 변경 금지). 서버마다 1인 1자물쇠.
