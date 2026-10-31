@@ -6,6 +6,23 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+// ---------- curved world (small-planet look): bend every vertex down by distance from camera in world XZ ----------
+// drop = K*d^2 / (1 + d/D): spherical near the player, flattening far away so the summit night view still reads.
+THREE.ShaderChunk.project_vertex = `vec4 mvPosition = vec4( transformed, 1.0 );
+#ifdef USE_BATCHING
+	mvPosition = batchingMatrix * mvPosition;
+#endif
+#ifdef USE_INSTANCING
+	mvPosition = instanceMatrix * mvPosition;
+#endif
+#if !defined( NO_BEND ) && !defined( DEPTH_PACKING ) && !defined( DISTANCE )
+	vec4 bendW = modelMatrix * mvPosition; vec2 bendD = bendW.xz - cameraPosition.xz; float bendL = length(bendD);
+	bendW.y -= 0.0055 * bendL * bendL / (1.0 + bendL / 70.0);
+	mvPosition = viewMatrix * bendW;
+#else
+	mvPosition = modelViewMatrix * mvPosition;
+#endif
+gl_Position = projectionMatrix * mvPosition;`;
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createClient } from '@supabase/supabase-js';
@@ -141,7 +158,7 @@ function terrainY(x, z) {
 // skyline
 {
   const n = quality === 'high' ? 1400 : 700;
-  const mat = skylineMat = new THREE.MeshToonMaterial({ gradientMap: null, color: '#2c2d3a', emissive: '#ffffff', emissiveMap: winTex, emissiveIntensity: 2.2 });
+  const mat = skylineMat = new THREE.MeshStandardMaterial({ color: '#2c2d3a', roughness: 0.6, metalness: 0.3, emissive: '#ffffff', emissiveMap: winTex, emissiveIntensity: 2.2 });
   const b = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), mat, n);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
   for (let i = 0; i < n; i++) { const r = 200 + Math.pow(Math.random(), 0.7) * 850, a = Math.random() * Math.PI * 2; const h = 12 + Math.pow(Math.random(), 3) * 110 * (r < 500 ? 1 : 0.7); const w = 10 + Math.random() * 18; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 3); m.compose(new THREE.Vector3(Math.cos(a) * r, -62, Math.sin(a) * r), q, new THREE.Vector3(w, h, w * (0.6 + Math.random() * 0.8))); b.setMatrixAt(i, m); }
@@ -156,7 +173,7 @@ let panoMat;
 {
   const R = 900, imgAspect = 4344 / 507, H = (2 * Math.PI * R) / imgAspect, TREE_V = 0.2; // treeline at 20% from bottom
   const tex = new THREE.TextureLoader().load(import.meta.env.BASE_URL + 'models/pano.webp'); tex.colorSpace = THREE.SRGBColorSpace;
-  panoMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, transparent: true, depthWrite: false });
+  panoMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, transparent: true, depthWrite: false }); panoMat.defines = { NO_BEND: '' };
   const cyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 128, 1, true), panoMat);
   cyl.position.y = (1.6 - 0.15 * R) - TREE_V * H + H / 2 - 230; // lowered: skyline just above horizon, image treeline behind summit treetops cyl.rotation.y = Math.PI / 2; cyl.renderOrder = -1; cyl.frustumCulled = false; scene.add(cyl);
 }
@@ -347,32 +364,8 @@ const myMarker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.Me
 // ---------- post processing / quality ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.0, 0.1, 2.0); bloom.enabled = false; // monochrome ink style: no bloom
-// ---- monochrome ink pass: 2 tones (white lit / light-gray shade) + black lines from depth+normal Sobel + faint texture lines
-const nrmRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }); nrmRT.depthTexture = new THREE.DepthTexture(1, 1); nrmRT.depthTexture.type = THREE.UnsignedIntType;
-const nrmMat = new THREE.MeshNormalMaterial();
-const inkPass = new ShaderPass({ uniforms: { tDiffuse: { value: null }, tNormal: { value: nrmRT.texture }, tDepth: { value: nrmRT.depthTexture }, res: { value: new THREE.Vector2(1, 1) }, near: { value: camera.near }, far: { value: camera.far }, thr: { value: 0.22 }, shade: { value: 0.8 }, lamps: { value: Array.from({ length: 32 }, () => new THREE.Vector3(0, -1e4, 0)) }, invProj: { value: new THREE.Matrix4() }, camW: { value: new THREE.Matrix4() } },
-  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }',
-  fragmentShader: `uniform sampler2D tDiffuse, tNormal, tDepth; uniform vec2 res; uniform float near, far, thr, shade; uniform vec3 lamps[32]; uniform mat4 invProj, camW; varying vec2 vUv;
-  float ld(vec2 uv){ float z = texture2D(tDepth, uv).x; return (near*far)/(far - z*(far-near)); }
-  float lum(vec2 uv){ return dot(texture2D(tDiffuse, uv).rgb, vec3(.299,.587,.114)); }
-  void main(){ vec2 px = 1.0/res; float d0 = ld(vUv); vec3 n0 = texture2D(tNormal, vUv).xyz;
-    float de = 0., ne = 0., le = 0.; float l0 = lum(vUv);
-    for (int i = 0; i < 4; i++) { vec2 o = (i==0? vec2(1,0): i==1? vec2(-1,0): i==2? vec2(0,1): vec2(0,-1)) * px * 1.2;
-      float d = ld(vUv+o); de = max(de, abs(d - d0) / max(d0, .001)); ne = max(ne, length(texture2D(tNormal, vUv+o).xyz - n0)); le = max(le, abs(lum(vUv+o) - l0)); }
-    float sky = step(0.9999, texture2D(tDepth, vUv).x);
-    float edge = max(smoothstep(.04, .09, de), smoothstep(.35, .6, ne)); edge *= (1. - sky) * (1. - smoothstep(60., 160., d0) * .6);
-    vec2 g = mat2(.7071,-.7071,.7071,.7071) * (vUv * res) / max(5., res.y / 160.); vec2 f = fract(g) - .5; float r = length(f);
-    float dotS = 1. - smoothstep(.36, .44, r), dotM = 1. - smoothstep(.2, .27, r);
-    float tone = l0 > thr * 1.9 ? 1.0 : (l0 > thr ? mix(1., shade, dotM) : mix(1., shade, max(dotS, .55))); if (sky > .5) tone = mix(.92, 1., smoothstep(0., .5, l0)); 
-    float tl = smoothstep(.06, .18, le) * .35 * (1. - smoothstep(20., 60., d0));
-    float c = tone * (1. - tl); vec3 rgb = texture2D(tDiffuse, vUv).rgb;
-    vec4 vp = invProj * vec4(vUv * 2. - 1., texture2D(tDepth, vUv).x * 2. - 1., 1.); vec3 wp = (camW * vec4(vp.xyz / vp.w, 1.)).xyz;
-    float warm = 0.; for (int i = 0; i < 32; i++) { float dl = distance(wp, lamps[i]); warm += 1. - smoothstep(0.8, 4.5, dl); } warm = clamp(warm, 0., 1.) * (1. - sky) * .6; vec3 col = mix(vec3(c), vec3(c) * vec3(1., .86, .45), warm);
-    float bulb = smoothstep(.85, .98, l0) * step(.12, rgb.r - rgb.b) * (1. - sky); col = mix(col, vec3(1., .85, .35), bulb);
-    col = mix(col, vec3(.06), edge * (1. - bulb));
-    gl_FragColor = vec4(col, 1.); }` });
-inkPass.uniforms.tNormal.value = nrmRT.texture; inkPass.uniforms.tDepth.value = nrmRT.depthTexture; composer.addPass(new OutputPass()); composer.addPass(inkPass);
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.08, 0.12, 1.6); composer.addPass(bloom); // weak: only HDR lamps glow
+composer.addPass(new OutputPass());
 function applyQuality() {
   const hi = quality === 'high';
   renderer.setPixelRatio(Math.min(devicePixelRatio, hi ? 2 : 1));
@@ -382,7 +375,7 @@ function applyQuality() {
   scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   resize();
 }
-function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); composer.setSize(w, h); { const pr = renderer.getPixelRatio(); nrmRT.setSize(w * pr, h * pr); inkPass.uniforms.res.value.set(w * pr, h * pr); } composer.setPixelRatio(renderer.getPixelRatio()); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); composer.setSize(w, h); composer.setPixelRatio(renderer.getPixelRatio()); camera.aspect = w / h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize);
 $('qualityBtn').onclick = () => { quality = quality === 'high' ? 'low' : 'high'; localStorage.setItem('namsan_q', quality); applyQuality(); };
 
@@ -542,7 +535,7 @@ function makeRetarget(src, tgt, ref) {
     straighten();
   };
 }
-let dayK = 0; const C_SUN = new THREE.Color('#f4f4f4'), C_MOON = new THREE.Color('#c8ccd4'), C_HEMI = new THREE.Color('#d8d8d8'), C_HEMI_N = new THREE.Color('#70747c'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
+let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
 function setAction(name) { if (!actions[name] || current === actions[name]) return; curAnim = name; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
 // ---------- toon / cel shading ----------
 const TOON_GRAD = (() => { const d = new Uint8Array([70, 140, 205, 255]); const t = new THREE.DataTexture(d, 4, 1, THREE.RedFormat); t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
@@ -566,7 +559,6 @@ function addOutline(o) { if (o.userData.outlined || o.userData.isOutline || !o.g
 function toonify(root) { const outl = []; root.traverse(o => { if (!o.isMesh || o.userData.isOutline) return; if (Array.isArray(o.material)) o.material = o.material.map(toToon); else o.material = toToon(o.material); if (o.isSkinnedMesh || o.userData.outline) outl.push(o); }); outl.forEach(addOutline); }
 let toonFrame = 0;
 function tick() {
-  if ((toonFrame++ % 30) === 0) toonify(scene);
   if (treeLOD) treeLOD.update(camera.position);
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
   if (inGame && !modalOpen()) {
@@ -620,10 +612,7 @@ function tick() {
   fenceGlow.material.color.setHSL((t * 0.03) % 1, 0.7, 0.6).multiplyScalar(1.5 * glow);
   towerLights.forEach((r, i) => r.material.color.setHSL((t * 0.05 + i * 0.25) % 1, 0.8, 0.6).multiplyScalar(2.5 * glow));
   myMarker.rotation.y = t * 2;
-  { const ov = scene.overrideMaterial, bgc = scene.background, fg = scene.fog; scene.overrideMaterial = nrmMat; scene.background = null; scene.fog = null; nameLabel.visible = false; renderer.setRenderTarget(nrmRT); renderer.clear(); renderer.render(scene, camera); renderer.setRenderTarget(null); scene.overrideMaterial = ov; scene.background = bgc; scene.fog = fg; nameLabel.visible = true; }
-  if ((toonFrame % 30) === 1) { const bl = []; scene.traverse(o => { if (o.isMesh && o.material === lampMat) bl.push(o.getWorldPosition(new THREE.Vector3())); }); pointLights.forEach(p => bl.push(p.position)); bl.sort((a, b) => a.distanceToSquared(player.position) - b.distanceToSquared(player.position)); inkPass.uniforms.lamps.value.forEach((v, i) => bl[i] ? v.copy(bl[i]) : v.set(0, -1e4, 0)); }
-  inkPass.uniforms.invProj.value.copy(camera.projectionMatrixInverse); inkPass.uniforms.camW.value.copy(camera.matrixWorld);
-  inkPass.uniforms.thr.value = THREE.MathUtils.lerp(0.3, 0.12, dayK); composer.render();
+  quality === 'high' ? composer.render() : renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 
@@ -697,6 +686,15 @@ gl.load(import.meta.env.BASE_URL + 'models/tree.glb', (g) => { g.scene.updateMat
 });
 function mergeGeos(gs) { const pos = [], uv = [], nor = [], ind = []; let o = 0; for (const g of gs) { const a = g.attributes; pos.push(...a.position.array); uv.push(...a.uv.array); nor.push(...a.normal.array); ind.push(...g.index.array.map((v) => v + o)); o += a.position.count; } const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(ind); return g; }
 const loadGLB = (f) => new Promise((res, rej) => gl.load(import.meta.env.BASE_URL + 'models/' + f, res, (p) => { $('loadmsg').textContent = `캐릭터 불러오는 중… ${p.total ? Math.round(p.loaded / p.total * 100) : ''}%`; }, rej));
+// new rigged FBX characters ship without textures -> paint plain colours by body region (bind-pose T-pose height bands)
+const PALETTE = { m: { hair: '#2a1d16', skin: '#f1c7a5', top: '#3d6fb0', bottom: '#2b2f3a', shoe: '#e9e6e0' }, f: { hair: '#3b2419', skin: '#f5cfb3', top: '#e58fa8', bottom: '#f2efe9', shoe: '#7a4a3a' } };
+function paintChar(root, k) { const P = PALETTE[k]; root.traverse(o => { if (!o.isMesh || o.material?.map) return; const g = o.geometry, pos = g.attributes.position; g.computeBoundingBox(); const bb = g.boundingBox, H = bb.max.y - bb.min.y, cx = (bb.min.x + bb.max.x) / 2;
+  const col = new Float32Array(pos.count * 3), C = {}; for (const n in P) C[n] = new THREE.Color(P[n]).convertSRGBToLinear();
+  for (let i = 0; i < pos.count; i++) { const h = (pos.getY(i) - bb.min.y) / H, ax = Math.abs(pos.getX(i) - cx) / H, z = pos.getZ(i); let c;
+    if (h < 0.06) c = C.shoe; else if (h < 0.47) c = C.bottom; else if (ax > 0.36) c = C.skin; else if (h < 0.8) c = C.top; else if (h < 0.83) c = C.skin; else if (h > 0.9 || (h > 0.84 && z < (bb.min.z + bb.max.z) / 2 - H * 0.02)) c = C.hair; else c = C.skin;
+    col.set([c.r, c.g, c.b], i * 3); }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3)); o.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 }); }); }
+const poseBind = (m) => m.traverse(o => o.isSkinnedMesh && o.skeleton.pose());
 let SOLDIER, REF; const LOS = {}; const REST = new Map();
 const saveRest = (m, key) => { const r = {}; m.traverse(o => o.isBone && (r[o.name] = [o.quaternion.clone(), o.position.clone()])); REST.set(key, r); m.userData.restKey = key; };
 let charSel = localStorage.getItem('namsan_char') || 'm'; const CHARS = {};
@@ -706,9 +704,9 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
     let best = 0, bd = 1e9; const a = new THREE.Vector3(), b = new THREE.Vector3(); for (let f = 0; f < 60; f++) { const t = walk.duration * f / 60; pm.setTime(t); probe.updateMatrixWorld(true); const d = L.getWorldPosition(a).distanceTo(R.getWorldPosition(b)); if (d < bd) { bd = d; best = t; } }
     const tr = walk.tracks.map(k => { const n = k.getValueSize(), v = k.createInterpolant().evaluate(best).slice(0, n); return new k.constructor(k.name, [0, 1], [...v, ...v]); });
     const calm = new THREE.AnimationClip('Idle', 1, tr); g.animations = g.animations.filter(c => c.name !== 'Idle').concat(calm); }
-  SOLDIER = g; for (const [k, c] of [['m', lm], ['f', lf]]) { const m = c.scene; const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); m.traverse(o => o.isMesh && (o.frustumCulled = false)); LOS[k] = m; saveRest(m, 'lo' + k); }
+  SOLDIER = g; for (const [k, c] of [['m', lm], ['f', lf]]) { const m = c.scene; const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); m.traverse(o => o.isMesh && (o.frustumCulled = false)); LOS[k] = m; paintChar(m, k); poseBind(m); saveRest(m, 'lo' + k); }
   for (const [k, c] of [['m', cm], ['f', cf]]) { const m = c.scene; m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
-    const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); CHARS[k] = m; saveRest(m, 'hi' + k); }
+    const h = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y; if (h > 3 || h < 1) m.scale.multiplyScalar(1.72 / h); CHARS[k] = m; paintChar(m, k); poseBind(m); saveRest(m, 'hi' + k); }
   // user characters have no animations -> drive them from a hidden Soldier rig (mixamo clips),
   // retargeted in world space using each rig's bind pose so differing rest orientations don't break it.
   const src = skClone(g.scene); src.visible = false; scene.add(src);
@@ -727,4 +725,4 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
   $('loading').classList.add('hidden'); drawName(); myName ? showServers() : showProfile();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
 tick();
-window.__game = { remotes, SID, setChar: (k) => setChar(k), player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, setDist: (v) => dist = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
+window.__game = { remotes, SID, setChar: (k) => setChar(k), player, camera, setYaw: (v) => yaw = v, setPitch: (v) => pitch = v, setDist: (v) => dist = v, setDay: (v) => dayK = v, groundY, walkable, LAYOUT, walkTo: (x, z, run) => moveTo = { x, z, run } };
