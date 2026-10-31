@@ -457,7 +457,7 @@ let camPull = 0, yaw = 0, pitch = 0.66, dist = 12; // Animal-Crossing style fixe
 const cv = $('c'); const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2();
 cv.addEventListener('pointerdown', e => { drag.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY }); cv.setPointerCapture(e.pointerId); });
 cv.addEventListener('pointermove', e => { const d = drag.get(e.pointerId); if (!d) return hover(e); }); // fixed camera: no rotation
-cv.addEventListener('pointerup', e => { const d = drag.get(e.pointerId); drag.delete(e.pointerId); if (d && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6 && inGame && !modalOpen()) { const L = pick(e); if (L) return showLock(L); const g = pickGround(e); if (g) moveTo = { x: g.x, z: g.z, run: performance.now() - lastClick < 350 }; lastClick = performance.now(); } });
+cv.addEventListener('pointerup', e => { const d = drag.get(e.pointerId); drag.delete(e.pointerId); if (d && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6 && inGame && !modalOpen()) { const L = pick(e); if (L) return showLock(L); const g = pickGround(e); if (g) moveTo = { x: g.x, z: g.z, run: performance.now() - lastClick < 350 || !!e.shiftKey }; lastClick = performance.now(); } });
 let lastClick = 0; const clickMark = new THREE.Mesh(new THREE.RingGeometry(0.25, 0.36, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff9ec8').multiplyScalar(2), transparent: true, opacity: 0.85, depthWrite: false })); clickMark.visible = false; scene.add(clickMark);
 function pickGround(e) { ndc.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(ndc, camera); const hit = ray.intersectObjects(groundMeshes, false).find(h => h.face && h.face.normal.y > 0.5 || h.object.isMesh && h.point.y > -60); if (!hit) return null; const { x, z } = hit.point; return walkable(x, z) ? { x, z } : null; }
 
@@ -548,7 +548,7 @@ function tick() {
       const sp = run ? 5.2 : 2.2; const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
       dx = (fx * -iz + -fz * ix) * sp * dt; dz = (fz * -iz + fx * ix) * sp * dt; // right = forward × up
     } else if (moveTo) { // click-to-move (click = walk, double-click = run)
-      run = moveTo.run; const vx = moveTo.x - P.x, vz = moveTo.z - P.z, dd = Math.hypot(vx, vz);
+      run = moveTo.run || keys.ShiftLeft || keys.ShiftRight; const vx = moveTo.x - P.x, vz = moveTo.z - P.z, dd = Math.hypot(vx, vz);
       if (dd < 0.2) moveTo = null; else { const st = Math.min(dd, (run ? 5.2 : 2.2) * dt); dx = vx / dd * st; dz = vz / dd * st; }
     }
     clickMark.visible = !!moveTo; if (moveTo) { clickMark.position.set(moveTo.x, groundY(moveTo.x, moveTo.z) + 0.05, moveTo.z); clickMark.scale.setScalar(1 + Math.sin(t * 6) * 0.15); }
@@ -570,7 +570,7 @@ function tick() {
   } else { $('tip').classList.add('hidden'); if (!inGame) yaw += dt * 0.05; }
   { const P = player.position, gy = groundY(P.x, P.z) + 0.02; P.y = Math.abs(gy - P.y) > 2 ? gy : P.y + (gy - P.y) * Math.min(1, dt * 14); }
   mixer?.update(dt); retarget?.(actions.Idle ? actions.Idle.getEffectiveWeight() : 0); updateRemotes(dt); nameLabel.position.copy(player.position).y += 2.05; merchantObjs.forEach(m => m.mixer?.update(dt));
-  const target = tmp.copy(player.position).add(new THREE.Vector3(0, window.__camY ?? 1.5, 0));
+  const target = tmp.copy(player.position); target.y += window.__camY ?? 1.3; if (!window.__camT || target.distanceTo(window.__camT) > 6) window.__camT = target.clone(); else window.__camT.lerp(target, Math.min(1, dt * 10)); target.copy(window.__camT); // look exactly at chest -> player at screen center, smooth follow
   const atTop = THREE.MathUtils.smoothstep(clamp((FR + 4 - Math.hypot(player.position.x, player.position.z)) / 8, 0, 1), 0, 1); camPull += (atTop - camPull) * Math.min(1, dt * 2);
   if (inGame) yaw = 0; const cd = inGame ? dist + camPull * 6 : 30; const cp = inGame ? pitch - camPull * 0.22 : 0.18; // summit: pull back + flatten so the night view reads
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
