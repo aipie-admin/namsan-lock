@@ -4,7 +4,6 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 // ---------- curved world (small-planet look): bend every vertex down by distance from camera in world XZ ----------
 // drop = K*d^2 / (1 + d/D): spherical near the player, flattening far away so the summit night view still reads.
@@ -16,8 +15,8 @@ THREE.ShaderChunk.project_vertex = `vec4 mvPosition = vec4( transformed, 1.0 );
 	mvPosition = instanceMatrix * mvPosition;
 #endif
 #if !defined( NO_BEND ) && !defined( DEPTH_PACKING ) && !defined( DISTANCE )
-	vec4 bendW = modelMatrix * mvPosition; vec2 bendD = bendW.xz - cameraPosition.xz; float bendL = length(bendD);
-	bendW.y -= 0.0055 * bendL * bendL / (1.0 + bendL / 70.0);
+	vec4 bendW = modelMatrix * mvPosition; float bendL = abs((cameraPosition.z - bendW.z) - 9.0); // fixed camera looks along -Z; player sits ~9m ahead
+	bendW.y -= 0.01 * bendL * bendL / (1.0 + bendL / 60.0); // cylindrical (rolling-log) bend: depth axis only
 	mvPosition = viewMatrix * bendW;
 #else
 	mvPosition = modelViewMatrix * mvPosition;
@@ -186,13 +185,13 @@ const pathLights = [];
   const asphalt = new THREE.MeshStandardMaterial({ roughness: 0.85, map: canvasTex(1024, 1024, (c, w) => { c.fillStyle = '#2b2b31'; c.fillRect(0, 0, w, w); for (let i = 0; i < 9000; i++) { const v = 30 + Math.random() * 30 | 0; c.fillStyle = `rgb(${v},${v},${v + 4})`; c.fillRect(Math.random() * w, Math.random() * w, 2, 2); } c.strokeStyle = '#e8e8e0'; c.lineWidth = 5; const sx = w / 44, sz = w / 24; for (const zr of [[2, 8], [17, 23]]) for (let x = -20; x <= 20; x += 2.6) { if (Math.abs(x) < 5) continue; c.beginPath(); c.moveTo((x + 22) * sx, zr[0] * sz); c.lineTo((x + 22) * sx, zr[1] * sz); c.stroke(); } c.setLineDash([30, 30]); c.strokeStyle = '#f0c040'; c.beginPath(); c.moveTo(w / 2, 0); c.lineTo(w / 2, w); c.stroke(); }) });
   const cobble = new THREE.TextureLoader().load(import.meta.env.BASE_URL + 'cobble.webp'); cobble.colorSpace = THREE.SRGBColorSpace; cobble.wrapS = cobble.wrapT = THREE.RepeatWrapping; cobble.anisotropy = 8; cobble.repeat.set(PZ.x * 2 / 2.4, (PZ.z1 - PZ.z0) / 1.35); // ~12cm cobbles
   const tile = new THREE.MeshStandardMaterial({ map: cobble, roughness: 0.85 });
-  const slab = (w, top, z0, z1, topMat, us) => { const h = top + 72; const g = new THREE.BoxGeometry(w, h, z1 - z0); const mats = [wallMat, wallMat, topMat, wallMat, wallMat, wallMat]; if (us) uvScale(g, us); const me = new THREE.Mesh(g, mats); me.position.set(0, top - h / 2, (z0 + z1) / 2); me.receiveShadow = true; scene.add(me); groundMeshes.push(me); return me; };
+  const slab = (w, top, z0, z1, topMat, us) => { const h = top + 72; const g = new THREE.BoxGeometry(w, h, z1 - z0, Math.ceil(w / 1.5), 1, Math.ceil((z1 - z0) / 1.5)); /* tessellated for curved-world bend */ const mats = [wallMat, wallMat, topMat, wallMat, wallMat, wallMat]; if (us) uvScale(g, us); const me = new THREE.Mesh(g, mats); me.position.set(0, top - h / 2, (z0 + z1) / 2); me.receiveShadow = true; scene.add(me); groundMeshes.push(me); return me; };
   slab(PK.x * 2, PK.y, PK.z0, PK.z1, asphalt);
   // the asphalt texture shouldn't repeat on the walls -> walls get repeat via separate uv scale
   slab(PZ.x * 2, PZ.y, PZ.z0, PZ.z1, tile);
   wallMat.map.repeat.set(10, 10);
   tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping; tileTex.repeat.set(6, 6);
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(FR + 0.6, FR + 0.6, 72, 96), [wallMat, tile, wallMat]); disc.position.y = -36; disc.receiveShadow = true; scene.add(disc); groundMeshes.push(disc);
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(FR + 0.6, FR + 0.6, 72, 96), [wallMat, wallMat, wallMat]); disc.position.y = -36.02; { const top = new THREE.Mesh(new THREE.RingGeometry(0.001, FR + 0.6, 96, 24).rotateX(-Math.PI / 2), tile); top.receiveShadow = true; scene.add(top); groundMeshes.push(top); } disc.receiveShadow = true; scene.add(disc); groundMeshes.push(disc);
   // straight stairs (each step is a tall box down to the hillside)
   const stepMat = new THREE.MeshStandardMaterial({ color: '#a49688', roughness: 0.8 });
   const steps = [], rails = [], iron = new THREE.MeshStandardMaterial({ color: '#2b2b30', metalness: 0.85, roughness: 0.4 });
@@ -454,14 +453,14 @@ $('viewClose').onclick = () => $('view').classList.add('hidden');
 const keys = {}; const modalOpen = () => !$('shop').classList.contains('hidden') || !$('modal').classList.contains('hidden') || !$('view').classList.contains('hidden');
 addEventListener('keydown', e => { if (modalOpen() || !inGame) return; keys[e.code] = true; if (e.code === 'KeyE') interact(); });
 addEventListener('keyup', e => keys[e.code] = false);
-let yaw = 0, pitch = 0.25, dist = 5.5; const drag = new Map(); let moveTo = null;
+let camPull = 0, yaw = 0, pitch = 0.66, dist = 12; // Animal-Crossing style fixed camera (yaw/pitch never change in game) const drag = new Map(); let moveTo = null;
 const cv = $('c'); const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2();
 cv.addEventListener('pointerdown', e => { drag.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY }); cv.setPointerCapture(e.pointerId); });
-cv.addEventListener('pointermove', e => { const d = drag.get(e.pointerId); if (!d) return hover(e); yaw -= (e.clientX - d.x) * 0.005; pitch = THREE.MathUtils.clamp(pitch + (e.clientY - d.y) * 0.004, -0.75, 1.2); d.x = e.clientX; d.y = e.clientY; });
+cv.addEventListener('pointermove', e => { const d = drag.get(e.pointerId); if (!d) return hover(e); }); // fixed camera: no rotation
 cv.addEventListener('pointerup', e => { const d = drag.get(e.pointerId); drag.delete(e.pointerId); if (d && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6 && inGame && !modalOpen()) { const L = pick(e); if (L) return showLock(L); const g = pickGround(e); if (g) moveTo = { x: g.x, z: g.z, run: performance.now() - lastClick < 350 }; lastClick = performance.now(); } });
 let lastClick = 0; const clickMark = new THREE.Mesh(new THREE.RingGeometry(0.25, 0.36, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff9ec8').multiplyScalar(2), transparent: true, opacity: 0.85, depthWrite: false })); clickMark.visible = false; scene.add(clickMark);
 function pickGround(e) { ndc.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(ndc, camera); const hit = ray.intersectObjects(groundMeshes, false).find(h => h.face && h.face.normal.y > 0.5 || h.object.isMesh && h.point.y > -60); if (!hit) return null; const { x, z } = hit.point; return walkable(x, z) ? { x, z } : null; }
-cv.addEventListener('wheel', e => { dist = THREE.MathUtils.clamp(dist + e.deltaY * 0.004, 2.2, 14); }, { passive: true });
+
 function pick(e) { ndc.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(ndc, camera); const hit = ray.intersectObjects(Object.values(realMeshes), false)[0]; return hit && hit.object.userData.ids[hit.instanceId]; }
 function hover(e) { if (!inGame) return; const L = pick(e); cv.style.cursor = L ? 'pointer' : ''; }
 // joystick
@@ -537,27 +536,6 @@ function makeRetarget(src, tgt, ref) {
 }
 let dayK = 0; const C_SUN = new THREE.Color('#ffad74'), C_MOON = new THREE.Color('#7f8fff'), C_HEMI = new THREE.Color('#a796d6'), C_HEMI_N = new THREE.Color('#3a4580'), FOG_N = new THREE.Color('#141a30'), C_LAMP = new THREE.Color('#ffd7a0');
 function setAction(name) { if (!actions[name] || current === actions[name]) return; curAnim = name; actions[name].reset().fadeIn(0.25).play(); current?.fadeOut(0.25); current = actions[name]; }
-// ---------- toon / cel shading ----------
-const TOON_GRAD = (() => { const d = new Uint8Array([70, 140, 205, 255]); const t = new THREE.DataTexture(d, 4, 1, THREE.RedFormat); t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
-const toonCache = new Map();
-function toToon(m) { if (!m || !(m.isMeshStandardMaterial || m.isMeshPhongMaterial || m.isMeshLambertMaterial) || m.userData.noToon) return m; let t = toonCache.get(m); if (t) return t;
-  t = new THREE.MeshToonMaterial({ gradientMap: TOON_GRAD, color: m.color, map: m.map, emissive: m.emissive, emissiveMap: m.emissiveMap, emissiveIntensity: m.emissiveIntensity ?? 1, normalMap: m.normalMap || null, alphaMap: m.alphaMap, transparent: m.transparent, opacity: m.opacity, alphaTest: m.alphaTest, side: m.side, vertexColors: m.vertexColors, fog: m.fog, depthWrite: m.depthWrite });
-  if (m.metalness > 0.5) t.color = m.color.clone().multiplyScalar(1.25); t.name = m.name; toonCache.set(m, t); toonCache.set(t, t); return t; }
-const outlineMat = new THREE.MeshBasicMaterial({ color: '#1a1020', side: THREE.BackSide, fog: true });
-outlineMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
-  #ifdef USE_SKINNING
-  vec3 oN = objectNormal;
-  #else
-  vec3 oN = normal;
-  #endif
-  vec4 cn = projectionMatrix * vec4(normalize(normalMatrix * oN), 0.0);
-  gl_Position.xy += normalize(cn.xy + 1e-6) * 0.006 * min(gl_Position.w, 12.0);`); };
-function addOutline(o) { if (o.userData.outlined || o.userData.isOutline || !o.geometry?.attributes.normal) return; o.userData.outlined = true;
-  const ol = o.isSkinnedMesh ? new THREE.SkinnedMesh(o.geometry, outlineMat) : new THREE.Mesh(o.geometry, outlineMat);
-  if (o.isSkinnedMesh) ol.bind(o.skeleton, o.bindMatrix); ol.userData.isOutline = true; ol.frustumCulled = false; ol.castShadow = false; ol.raycast = () => {};
-  ol.position.copy(o.position); ol.quaternion.copy(o.quaternion); ol.scale.copy(o.scale); o.parent.add(ol); }
-function toonify(root) { const outl = []; root.traverse(o => { if (!o.isMesh || o.userData.isOutline) return; if (Array.isArray(o.material)) o.material = o.material.map(toToon); else o.material = toToon(o.material); if (o.isSkinnedMesh || o.userData.outline) outl.push(o); }); outl.forEach(addOutline); }
-let toonFrame = 0;
 function tick() {
   if (treeLOD) treeLOD.update(camera.position);
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
@@ -593,7 +571,8 @@ function tick() {
   { const P = player.position, gy = groundY(P.x, P.z) + 0.02; P.y = Math.abs(gy - P.y) > 2 ? gy : P.y + (gy - P.y) * Math.min(1, dt * 14); }
   mixer?.update(dt); retarget?.(actions.Idle ? actions.Idle.getEffectiveWeight() : 0); updateRemotes(dt); nameLabel.position.copy(player.position).y += 2.05; merchantObjs.forEach(m => m.mixer?.update(dt));
   const target = tmp.copy(player.position).add(new THREE.Vector3(0, window.__camY ?? 1.5, 0));
-  const cd = inGame ? dist : 30; const cp = inGame ? pitch : 0.18;
+  const atTop = THREE.MathUtils.smoothstep(clamp((FR + 4 - Math.hypot(player.position.x, player.position.z)) / 8, 0, 1), 0, 1); camPull += (atTop - camPull) * Math.min(1, dt * 2);
+  if (inGame) yaw = 0; const cd = inGame ? dist + camPull * 6 : 30; const cp = inGame ? pitch - camPull * 0.22 : 0.18; // summit: pull back + flatten so the night view reads
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(cp) * cd, target.y + Math.sin(cp) * cd, target.z + Math.cos(yaw) * Math.cos(cp) * cd);
   camera.position.y = Math.max(camera.position.y, (walkable(camera.position.x, camera.position.z) ? groundY(camera.position.x, camera.position.z) : -70) + 0.4); camera.lookAt(inGame ? target : new THREE.Vector3(0, 25, 0));
   sunLight.target.position.copy(player.position); sunLight.position.copy(player.position).add(new THREE.Vector3(sun.x, 0.35, sun.z).normalize().multiplyScalar(80));
@@ -673,12 +652,12 @@ gl.load(import.meta.env.BASE_URL + 'models/tree.glb', (g) => { g.scene.updateMat
   near.castShadow = true; near.receiveShadow = true; near.frustumCulled = far.frustumCulled = false; scene.add(near, far);
   const mats = TREES.map(([x, y, z, h, r]) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), r), new THREE.Vector3(h * (0.85 + (r % 1) * 0.3), h, h * (0.85 + (r % 1) * 0.3))));
   const tint = TREES.map(() => new THREE.Color().setHSL(0.3 + Math.random() * 0.06, 0.35, 0.5 + Math.random() * 0.15));
-  const d2 = new Float32Array(N), idx = [...Array(N).keys()], NEAR = 42;
+  const d2 = new Float32Array(N), idx = [...Array(N).keys()], NEAR = 60;
   treeLOD = { last: new THREE.Vector3(1e9, 0, 0), update(p) {
-    if (p.distanceToSquared(this.last) < 4) return; this.last.copy(p);
+    if (p.distanceToSquared(this.last) < 1) return; this.last.copy(p);
     for (let i = 0; i < N; i++) { const t = TREES[i]; d2[i] = (t[0] - p.x) ** 2 + (t[2] - p.z) ** 2; }
     idx.sort((a, b) => d2[a] - d2[b]); let n = 0, f = 0;
-    for (const i of idx) { if (n < nearCap && d2[i] < NEAR * NEAR) { near.setMatrixAt(n, mats[i]); near.setColorAt(n, tint[i]); n++; } else { far.setMatrixAt(f, mats[i]); far.setColorAt(f, tint[i]); f++; } }
+    for (const i of idx) { if (TREES[i][2] > p.z - 2 && d2[i] < 300) continue; /* don't block the fixed camera */ if (n < nearCap && d2[i] < NEAR * NEAR) { near.setMatrixAt(n, mats[i]); near.setColorAt(n, tint[i]); n++; } else { far.setMatrixAt(f, mats[i]); far.setColorAt(f, tint[i]); f++; } }
     near.count = n; far.count = f; near.instanceMatrix.needsUpdate = far.instanceMatrix.needsUpdate = true; if (near.instanceColor) near.instanceColor.needsUpdate = true; if (far.instanceColor) far.instanceColor.needsUpdate = true;
   } };
   treeLOD.update(camera.position);
@@ -720,7 +699,7 @@ Promise.all([loadGLB('char_m.glb'), loadGLB('char_f.glb'), loadGLB('soldier.glb'
     for (const pr of mo.cfg.props || []) gl.load(import.meta.env.BASE_URL + pr.model, m => { const o = m.scene; o.scale.setScalar(pr.scale || 1); const bb = new THREE.Box3().setFromObject(o); o.position.set(pr.x || 0, -bb.min.y, pr.z || 0); o.rotation.y = pr.rotY || 0; o.traverse(c => c.isMesh && (c.castShadow = c.receiveShadow = true)); mo.group.add(o); });
     const put = (npc, anims) => { npc.position.set(0, 0, -0.1); npc.rotation.y = Math.PI + (mo.cfg.rotY || 0); npc.scale.multiplyScalar(mo.cfg.scale || 1); mo.group.add(npc); mo.mixer = new THREE.AnimationMixer(npc); const c = anims.find(a => /idle/i.test(a.name)) || anims[0]; c && mo.mixer.clipAction(c).play(); };
     const fallback = () => { const npc = skClone(g.scene); npc.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.set('#e8b9c9'); } }); put(npc, idle ? [idle] : []); };
-    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); const bb = new THREE.Box3().setFromObject(m.scene, true); put(m.scene, m.animations); m.scene.position.set(0, -bb.min.y * (mo.cfg.scale || 1) + (mo.cfg.sitY || 0), mo.cfg.sitZ || 0); m.scene.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.frustumCulled = false; o.userData.outline = true; } }); }, undefined, fallback); else fallback();
+    if (mo.cfg.model) gl.load(import.meta.env.BASE_URL + mo.cfg.model, m => { const h = new THREE.Box3().setFromObject(m.scene).getSize(new THREE.Vector3()).y; if (h > 3 || h < 0.5) m.scene.scale.multiplyScalar(1.65 / h); const bb = new THREE.Box3().setFromObject(m.scene, true); put(m.scene, m.animations); m.scene.position.set(0, -bb.min.y * (mo.cfg.scale || 1) + (mo.cfg.sitY || 0), mo.cfg.sitZ || 0); m.scene.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.frustumCulled = false; } }); }, undefined, fallback); else fallback();
   }
   $('loading').classList.add('hidden'); drawName(); myName ? showServers() : showProfile();
 }).catch((e) => { console.error(e); $('loading').classList.add('hidden'); showServers(); });
