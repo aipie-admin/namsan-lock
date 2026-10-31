@@ -16,7 +16,7 @@ THREE.ShaderChunk.project_vertex = `vec4 mvPosition = vec4( transformed, 1.0 );
 #endif
 #if !defined( NO_BEND ) && !defined( DEPTH_PACKING ) && !defined( DISTANCE )
 	vec4 bendW = modelMatrix * mvPosition; float bendL = abs((cameraPosition.z - bendW.z) - 9.0); // fixed camera looks along -Z; player sits ~9m ahead
-	bendW.y -= 0.01 * bendL * bendL / (1.0 + bendL / 60.0); // cylindrical (rolling-log) bend: depth axis only
+	bendW.y -= 0.03 * bendL * bendL / (1.0 + bendL / 120.0); // cylindrical (rolling-log) bend: depth axis only
 	mvPosition = viewMatrix * bendW;
 #else
 	mvPosition = modelViewMatrix * mvPosition;
@@ -577,7 +577,7 @@ function tick() {
   camera.position.y = Math.max(camera.position.y, (walkable(camera.position.x, camera.position.z) ? groundY(camera.position.x, camera.position.z) : -70) + 0.4); camera.lookAt(inGame ? target : new THREE.Vector3(0, 25, 0));
   sunLight.target.position.copy(player.position); sunLight.position.copy(player.position).add(new THREE.Vector3(sun.x, 0.35, sun.z).normalize().multiplyScalar(80));
   // ---- time of day tied to route progress (0 = parking lot sunset, 1 = fence night) ----
-  { const P = player.position; const target = !inGame ? 0.55 : routeT(P.x, P.z); dayK += (target - dayK) * Math.min(1, dt * 1.5); }
+  { const P = player.position; const target = !inGame ? 0.55 : routeT(P.x, P.z); dayK += (target - dayK) * Math.min(1, dt * 1.5); if (window.__dayLock != null) dayK = window.__dayLock; }
   const k = dayK, L = THREE.MathUtils.lerp, ss = THREE.MathUtils.smoothstep;
   sun.setFromSphericalCoords(1, THREE.MathUtils.degToRad(L(85.5, 97, k)), THREE.MathUtils.degToRad(-120));
   const su = skyMain.material.uniforms; su.sunPosition.value.copy(sun); su.rayleigh.value = L(2.6, 0.6, k); su.turbidity.value = L(9, 2, k);
